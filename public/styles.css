@@ -97,7 +97,7 @@ p { margin: 0; }
 .tab .dot { position: absolute; top: 6px; left: calc(50% + 8px); width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 
 /* ---------- buttons */
-.btn { appearance: none; border: 1px solid var(--line-2); background: var(--card); color: var(--text); border-radius: 12px; padding: 11px 16px; min-height: 44px; font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: transform 0.08s ease, background 0.15s; }
+.btn { white-space: nowrap; appearance: none; border: 1px solid var(--line-2); background: var(--card); color: var(--text); border-radius: 12px; padding: 11px 16px; min-height: 44px; font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: transform 0.08s ease, background 0.15s; }
 .btn:active { transform: scale(0.98); }
 .btn svg { width: 18px; height: 18px; flex: none; }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
@@ -331,3 +331,6 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 
 .ic-dot { width: 34px; height: 34px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); display: flex; align-items: center; justify-content: center; flex: none; }
 .ic-dot svg { width: 18px; height: 18px; }
+
+.btn-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.btn-pair .btn { min-width: 0; padding-left: 10px; padding-right: 10px; }

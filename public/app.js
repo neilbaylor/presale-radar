@@ -1298,11 +1298,11 @@ function loadChecks(saleId) {
 function afterSale(show, nextSale) {
   if (S.guest && S.route.name === 'link')
     return `<div class="section"><div class="card stack" style="gap:12px"><p class="muted small">Done with this show? Either one updates your calendar.</p>
-      <div class="row"><a class="btn block primary" href="${esc(S.guest.links.got)}">${I.done} Got tickets</a><a class="btn block" href="${esc(S.guest.links.hide)}">${I.eyeOff} Not interested</a></div></div></div>`;
+      <div class="btn-pair"><a class="btn primary" href="${esc(S.guest.links.got)}">${I.done} Got tickets</a><a class="btn" href="${esc(S.guest.links.hide)}">${I.eyeOff} Not for me</a></div></div></div>`;
   return `<div class="section"><div class="card stack" style="gap:12px">
     <p class="muted small">How did it go? Optional. Either one stops reminders for this show.</p>
-    <div class="row"><button class="btn block ${show.gotTickets ? 'soft' : 'primary'}" data-act="got" data-id="${esc(show.id)}">${I.done} ${show.gotTickets ? 'Marked as going' : 'Got tickets'}</button>
-      <button class="btn block" data-act="hide-show" data-id="${esc(show.id)}" data-back="1">${I.eyeOff} Hide show</button></div>
+    <div class="btn-pair"><button class="btn ${show.gotTickets ? 'soft' : 'primary'}" data-act="got" data-id="${esc(show.id)}">${I.done} ${show.gotTickets ? 'Going' : 'Got tickets'}</button>
+      <button class="btn" data-act="hide-show" data-id="${esc(show.id)}" data-back="1">${I.eyeOff} Hide show</button></div>
     ${nextSale && !show.gotTickets ? `<hr class="sep" style="margin:2px 0"><div class="row tap" data-act="nav" data-href="#/go/${encodeURIComponent(nextSale.id)}"><div class="grow"><div class="small faint">Next chance</div><b>${esc(nextSale.name)}</b> <span class="muted small">${fmtDay(nextSale.startUtc)}, ${fmtTime(nextSale.startUtc)}</span></div><span class="chev">${I.chev}</span></div>` : ''}
   </div></div>`;
 }
