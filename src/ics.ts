@@ -1,0 +1,136 @@
+/**
+ * Calendar events for a person: every sale they'll act on. Used both for the
+ * subscribed feed and for direct sync into iCloud. Each event links to a
+ * sign-in-free sale screen and carries "Got tickets" / "Not interested" links.
+ */
+import type { Ctx, EventRow, SaleRow, User } from './types.js';
+import { codesForSale, getFollows, getSetting, interest, loadCodeContext, now, userEventMap } from './db.js';
+import { headliner } from './sync.js';
+import { requirementHint } from './reminders.js';
+import { linkUrl } from './secrets.js';
+import { formatDate, sha256 } from './util.js';
+
+function esc(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+}
+
+/** RFC 5545 line folding at 75 octets. */
+export function fold(line: string): string {
+  const bytes = new TextEncoder().encode(line);
+  if (bytes.length <= 75) return line;
+  const parts: string[] = [];
+  let cur = '';
+  let curLen = 0;
+  for (const ch of line) {
+    const len = new TextEncoder().encode(ch).length;
+    if (curLen + len > (parts.length ? 74 : 75)) {
+      parts.push(cur);
+      cur = '';
+      curLen = 0;
+    }
+    cur += ch;
+    curLen += len;
+  }
+  parts.push(cur);
+  return parts.join('\r\n ');
+}
+
+export function stamp(ms: number): string {
+  return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+export interface CalEntry {
+  uid: string;
+  saleId: string;
+  eventId: string;
+  body: string[]; // VEVENT content lines (without DTSTAMP), already folded
+  hash: string;
+}
+
+/** The base URL links should use when there's no request in hand (scheduler). */
+export async function baseUrlFor(ctx: Ctx): Promise<string> {
+  return ctx.cfg.publicUrl ?? (await getSetting<string>(ctx, 'base_url', 'http://localhost:3000'));
+}
+
+export function uidFor(saleId: string): string {
+  return `${saleId.replace(/[^A-Za-z0-9:._-]/g, '')}@presale-radar`;
+}
+
+export async function calendarEntries(ctx: Ctx, user: User, baseUrl: string): Promise<CalEntry[]> {
+  const t = now(ctx);
+  const rows = await ctx.db.query<SaleRow & { ev: EventRow }>(
+    `SELECT s.*, row_to_json(e.*) AS ev FROM sales s JOIN events e ON e.id = s.event_id
+      WHERE s.removed = FALSE AND s.start_utc IS NOT NULL AND s.start_utc > $1
+        AND COALESCE(e.status, '') <> 'canceled'
+      ORDER BY s.start_utc LIMIT 500`,
+    [t - 3 * 86_400_000],
+  );
+  const [follows, ue, codes, devices] = await Promise.all([
+    getFollows(ctx, user.id),
+    userEventMap(ctx, [...new Set(rows.map((r) => r.event_id))]),
+    loadCodeContext(ctx, user.id),
+    ctx.db.one<{ n: number }>('SELECT COUNT(*)::int AS n FROM push_subscriptions WHERE user_id = $1', [user.id]),
+  ]);
+  // With push on, the app already pings 15 minutes before; a calendar alarm too would be a double ping.
+  const withAlarm = (devices?.n ?? 0) === 0;
+
+  const out: CalEntry[] = [];
+  for (const r of rows) {
+    const state = ue.get(`${user.id}:${r.event_id}`);
+    if (state?.got_tickets || interest(r.ev, state, follows).level !== 'remind') continue;
+    const who = headliner(r.ev);
+    const saleName = r.kind === 'public' ? 'On-sale' : r.name;
+    const [open, got, hide] = await Promise.all([
+      linkUrl(ctx, baseUrl, user.id, 'sale', r.id),
+      linkUrl(ctx, baseUrl, user.id, 'got', r.event_id),
+      linkUrl(ctx, baseUrl, user.id, 'hide', r.event_id),
+    ]);
+    const hint = requirementHint(r, codesForSale(r, r.ev.attraction_ids ?? [], codes));
+    const desc = [
+      `${who} at ${r.ev.venue_name ?? ''}, ${formatDate(r.ev.local_date)}`,
+      hint,
+      '',
+      `▶ Open the sale screen (code copied, one tap to Ticketmaster):`,
+      open,
+      '',
+      `✓ Got tickets? Stop reminding me:`,
+      got,
+      '',
+      `✕ Not interested? Remove this show:`,
+      hide,
+    ]
+      .filter((l) => l !== null)
+      .join('\n');
+    const body = [
+      `UID:${uidFor(r.id)}`,
+      `DTSTART:${stamp(r.start_utc!)}`,
+      'DURATION:PT30M',
+      fold(`SUMMARY:${esc(`🎟 ${who}: ${saleName}`)}`),
+      fold(`LOCATION:${esc(r.ev.venue_name ?? '')}`),
+      fold(`DESCRIPTION:${esc(desc)}`),
+      fold(`URL:${open}`),
+      ...(withAlarm
+        ? ['BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT15M', fold(`DESCRIPTION:${esc(`${who} ${saleName} in 15 minutes`)}`), 'END:VALARM']
+        : []),
+    ];
+    out.push({ uid: uidFor(r.id), saleId: r.id, eventId: r.event_id, body, hash: await sha256(body.join('\n')) });
+  }
+  return out;
+}
+
+const HEADER = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Presale Radar//EN', 'CALSCALE:GREGORIAN'];
+
+/** One event as a standalone calendar object (what CalDAV PUT expects). */
+export function singleEventIcs(entry: CalEntry, t: number): string {
+  return [...HEADER, 'BEGIN:VEVENT', `DTSTAMP:${stamp(t)}`, ...entry.body, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n') + '\r\n';
+}
+
+/** The subscribed feed (for calendars without direct sync). */
+export async function buildCalendar(ctx: Ctx, user: User, baseUrl: string): Promise<string> {
+  const t = now(ctx);
+  const entries = await calendarEntries(ctx, user, baseUrl);
+  const lines = [...HEADER, 'METHOD:PUBLISH', 'X-WR-CALNAME:Presales', 'X-PUBLISHED-TTL:PT1H', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H'];
+  for (const e of entries) lines.push('BEGIN:VEVENT', `DTSTAMP:${stamp(t)}`, ...e.body, 'END:VEVENT');
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n') + '\r\n';
+}

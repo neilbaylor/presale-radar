@@ -1,0 +1,32 @@
+{
+  "name": "presale-radar",
+  "version": "1.0.0",
+  "description": "Installable web app that tracks concert presales, finds codes and reminds you calmly.",
+  "scripts": {
+    "dev": "DEMO=1 tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "vapid": "node scripts/vapid.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.17",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "http_ece": "^1.2.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.11",
+    "hono": "^4.13.20",
+    "pg": "^8.23.1"
+  },
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}
