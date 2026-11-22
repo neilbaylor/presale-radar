@@ -115,6 +115,29 @@ export async function calendarEntries(ctx: Ctx, user: User, baseUrl: string): Pr
     ];
     out.push({ uid: uidFor(r.id), saleId: r.id, eventId: r.event_id, body, hash: await sha256(body.join('\n')) });
   }
+  // Sign-up deadlines for artists you follow (skipped once you tap "I'm signed up").
+  const signups = await ctx.db.query<{ artist_id: string; name: string; label: string; at_utc: number; url: string; signup_url: string | null; done: boolean }>(
+    `SELECT n.artist_id, a.name, n.label, n.at_utc, n.url, n.signup_url,
+            EXISTS (SELECT 1 FROM job_marks m WHERE m.key = 'signed:' || $1::text || ':' || n.artist_id || ':' || n.label || ':' || n.at_utc) AS done
+       FROM artist_notes n JOIN artists a ON a.id = n.artist_id
+      WHERE n.kind = 'signup_deadline' AND n.at_utc > $2
+        AND EXISTS (SELECT 1 FROM user_artists ua WHERE ua.user_id = $1::bigint AND ua.artist_id = n.artist_id AND ua.mode = 'follow')`,
+    [user.id, t],
+  );
+  for (const n of signups) {
+    if (n.done) continue;
+    const link = n.signup_url ?? n.url;
+    const uid = `signup-${n.artist_id}-${n.at_utc}@presale-radar`;
+    const body = [
+      `UID:${uid}`,
+      `DTSTART:${stamp(n.at_utc - 60 * 60_000)}`,
+      'DURATION:PT1H',
+      fold(`SUMMARY:${esc(`✍️ Sign up: ${n.name} ${n.label}`)}`),
+      fold(`DESCRIPTION:${esc(`Sign-up closes at the end of this event. Without it there's no presale code.\n\n${link}`)}`),
+      fold(`URL:${link}`),
+    ];
+    out.push({ uid, saleId: uid, eventId: n.artist_id, body, hash: await sha256(body.join('\n')) });
+  }
   return out;
 }
 

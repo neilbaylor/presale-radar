@@ -290,4 +290,54 @@ CREATE TABLE calendar_items (
   PRIMARY KEY (user_id, uid)
 );
 `,
+  /* 4: smarter scheduling, venue websites, sign-up deadlines */ `
+ALTER TABLE venues ADD COLUMN next_sync BIGINT;
+ALTER TABLE venues ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE venues ADD COLUMN last_change BIGINT;
+ALTER TABLE artists ADD COLUMN next_sync BIGINT;
+ALTER TABLE artists ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE artists ADD COLUMN last_change BIGINT;
+ALTER TABLE artists ADD COLUMN help_checked BIGINT;
+
+-- One-off markers for global jobs (e.g. "re-checked this sale 10 minutes before").
+CREATE TABLE job_marks (
+  key  TEXT PRIMARY KEY,
+  at   BIGINT NOT NULL
+);
+
+-- API calls per provider per day, so every job shares one budget.
+CREATE TABLE api_usage (
+  provider TEXT NOT NULL,
+  day      TEXT NOT NULL,
+  calls    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider, day)
+);
+
+-- Venue websites to read for events (schema.org JSON-LD or an .ics feed).
+CREATE TABLE venue_pages (
+  url          TEXT PRIMARY KEY,
+  venue_id     TEXT,
+  label        TEXT,
+  added_by     BIGINT REFERENCES users (id) ON DELETE SET NULL,
+  next_check   BIGINT,
+  last_checked BIGINT,
+  last_error   TEXT,
+  last_found   INTEGER NOT NULL DEFAULT 0,
+  fail_count   INTEGER NOT NULL DEFAULT 0
+);
+
+-- Facts read from Ticketmaster help articles: sign-up deadlines and presale times per artist.
+CREATE TABLE artist_notes (
+  artist_id  TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('signup_deadline', 'presale_time', 'general_sale')),
+  label      TEXT NOT NULL,
+  at_utc     BIGINT NOT NULL,
+  url        TEXT,
+  signup_url TEXT,
+  sentence   TEXT,
+  found_at   BIGINT NOT NULL,
+  PRIMARY KEY (artist_id, kind, label, at_utc)
+);
+CREATE INDEX artist_notes_at ON artist_notes (at_utc);
+`,
 ];

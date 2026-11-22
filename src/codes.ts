@@ -15,6 +15,7 @@ import type { Ctx } from './types.js';
 import { confidenceLabel, getAllFollows, getSetting, interest, now, setSetting, userEventMap } from './db.js';
 import { demoCodePage, demoSearch } from './demo.js';
 import { enqueue } from './notify.js';
+import { canSpend, spend } from './budget.js';
 
 // ---------------------------------------------------------------- extraction
 
@@ -65,17 +66,72 @@ export interface Candidate {
   snippet: string;
 }
 
-/** Code-like tokens in a window of text, each with its phrasing strength. */
-export function candidatesIn(text: string, opts: { exclude?: Set<string> } = {}): Candidate[] {
-  const best = new Map<string, Candidate>();
+export interface Occurrence {
+  code: string;
+  index: number;
+  strength: number;
+}
+
+const ENGLISH = new Set(
+  'below above here there sent soon required needed coming tomorrow today later tonight unknown none email inbox spam provided available attached included shown listed'.split(' '),
+);
+
+/** Codes are usually CAPS, but "code: Spring2026" or "password is “harbour”" count too. */
+function acceptToken(tok: string, quoted: boolean): boolean {
+  const up = tok.toUpperCase();
+  if (STOPWORDS.has(up) || ENGLISH.has(tok.toLowerCase())) return false;
+  if (!/[A-Za-z]/.test(tok)) return false;
+  if (/^(19|20)\d\d$/.test(tok)) return false;
+  return quoted || /[A-Z]/.test(tok) || /\d/.test(tok);
+}
+
+const STRONG_CAPTURE =
+  /(?:\b(?:codes?|passwords?|passcodes?|pass code|pw)\b\s*(?:is|are|was|were|=|:|-|–|—)?\s*(?:is\s*)?|\b(?:use|try|enter)\s+(?:the\s+)?(?:code\s+|password\s+)?)(["'“‘(]?)([A-Za-z0-9][A-Za-z0-9_-]{3,24})["'”’)]?((?:\s*(?:,|\bor\b|\band\b|\/)\s*["'“‘]?[A-Za-z0-9][A-Za-z0-9_-]{3,24}["'”’]?)*)/gi;
+const QUOTED = /["“‘]([A-Za-z0-9][A-Za-z0-9_-]{3,24})["”’]/g;
+
+/** Every code-like token in the text, with how strongly the wording says "this is a code". */
+export function codeOccurrences(text: string): Occurrence[] {
+  const out: Occurrence[] = [];
+  for (const m of text.matchAll(STRONG_CAPTURE)) {
+    const quoted = !!m[1];
+    const main = m[2];
+    const start = m.index! + m[0].indexOf(main);
+    if (acceptToken(main, quoted)) out.push({ code: main, index: start, strength: 0.9 });
+    // "use HYPED or SETBREAK" / "codes: ONE, TWO and THREE"
+    if (m[3] && out.length && out[out.length - 1].index === start) {
+      let offset = m.index! + m[0].length - m[3].length;
+      for (const t of m[3].matchAll(/["'“‘]?([A-Za-z0-9][A-Za-z0-9_-]{3,24})["'”’]?/g)) {
+        if (!/^(or|and)$/i.test(t[1]) && acceptToken(t[1], /["'“‘]/.test(t[0]))) out.push({ code: t[1], index: offset + t.index!, strength: 0.85 });
+      }
+    }
+  }
+  for (const m of text.matchAll(QUOTED)) {
+    const near = text.slice(Math.max(0, m.index! - 80), m.index! + m[0].length + 40);
+    if (KEYWORD.test(near) && acceptToken(m[1], true)) out.push({ code: m[1], index: m.index! + 1, strength: 0.8 });
+  }
   TOKEN.lastIndex = 0;
   for (const m of text.matchAll(TOKEN)) {
-    const tok = m[0];
-    if (!looksLikeCode(tok) || opts.exclude?.has(tok)) continue;
-    const strength = phraseStrength(text, m.index!);
-    const prev = best.get(tok);
-    if (!prev || strength > prev.strength) {
-      best.set(tok, { code: tok, strength, snippet: text.slice(Math.max(0, m.index! - 70), m.index! + tok.length + 50).replace(/\s+/g, ' ').trim() });
+    if (!looksLikeCode(m[0])) continue;
+    out.push({ code: m[0], index: m.index!, strength: phraseStrength(text, m.index!) });
+  }
+  // One entry per position, strongest reading wins.
+  const byPos = new Map<number, Occurrence>();
+  for (const o of out) {
+    const prev = byPos.get(o.index);
+    if (!prev || o.strength > prev.strength) byPos.set(o.index, o);
+  }
+  return [...byPos.values()].sort((a, b) => a.index - b.index);
+}
+
+/** Code-like tokens in a window of text, each with its best phrasing strength. Case is kept. */
+export function candidatesIn(text: string, opts: { exclude?: Set<string> } = {}): Candidate[] {
+  const best = new Map<string, Candidate>();
+  for (const o of codeOccurrences(text)) {
+    const key = o.code.toUpperCase();
+    if (opts.exclude?.has(key)) continue;
+    const prev = best.get(key);
+    if (!prev || o.strength > prev.strength) {
+      best.set(key, { code: o.code, strength: o.strength, snippet: text.slice(Math.max(0, o.index - 70), o.index + o.code.length + 50).replace(/\s+/g, ' ').trim() });
     }
   }
   return [...best.values()];
@@ -146,11 +202,9 @@ export function extractArtistCodes(text: string, artists: ArtistRef[]): (Candida
   mentions.sort((a, b) => a.start - b.start);
 
   const perArtist = new Map<string, Map<string, Candidate & { artistId: string; hits: number }>>();
-  TOKEN.lastIndex = 0;
-  for (const m of text.matchAll(TOKEN)) {
-    const tok = m[0];
-    const pos = m.index!;
-    if (!looksLikeCode(tok)) continue;
+  for (const occ of codeOccurrences(text)) {
+    const tok = occ.code;
+    const pos = occ.index;
     // Credit the closest artist named before the token; only look ahead ("use X for Artist")
     // when nothing was named shortly before it.
     let best: { artistId: string; start: number; dist: number } | null = null;
@@ -163,8 +217,8 @@ export function extractArtistCodes(text: string, artists: ArtistRef[]): (Candida
       const ahead = mentions.find((mt) => mt.start >= pos + tok.length && mt.start - pos - tok.length <= 40);
       if (ahead) best = { artistId: ahead.artistId, start: ahead.start, dist: ahead.start - pos };
     }
-    if (!best || fullNames.get(best.artistId) === tok) continue;
-    let strength = phraseStrength(text, pos);
+    if (!best || fullNames.get(best.artistId) === tok.toUpperCase()) continue;
+    let strength = occ.strength;
     if (strength < 0.45) {
       const span = text.slice(Math.min(best.start, pos), Math.max(best.start, pos));
       if (!KEYWORD.test(span)) continue;
@@ -172,18 +226,19 @@ export function extractArtistCodes(text: string, artists: ArtistRef[]): (Candida
     }
     const map = perArtist.get(best.artistId) ?? new Map();
     const snippet = text.slice(Math.max(0, pos - 70), pos + tok.length + 50).replace(/\s+/g, ' ').trim();
-    const r = map.get(tok) ?? { code: tok, strength, snippet, artistId: best.artistId, hits: 0 };
+    const key = tok.toUpperCase();
+    const r = map.get(key) ?? { code: tok, strength, snippet, artistId: best.artistId, hits: 0 };
     r.hits++;
-    if (strength > r.strength) Object.assign(r, { strength, snippet });
-    map.set(tok, r);
+    if (strength > r.strength) Object.assign(r, { code: tok, strength, snippet });
+    map.set(key, r);
     perArtist.set(best.artistId, map);
   }
 
   const artistsPerCode = new Map<string, number>();
-  for (const map of perArtist.values()) for (const code of map.keys()) artistsPerCode.set(code, (artistsPerCode.get(code) ?? 0) + 1);
+  for (const map of perArtist.values()) for (const key of map.keys()) artistsPerCode.set(key, (artistsPerCode.get(key) ?? 0) + 1);
   const out: (Candidate & { artistId: string; hits: number })[] = [];
   for (const map of perArtist.values())
-    for (const c of map.values()) if ((artistsPerCode.get(c.code) ?? 0) < 3 || c.strength >= 0.9) out.push(c);
+    for (const c of map.values()) if ((artistsPerCode.get(c.code.toUpperCase()) ?? 0) < 3 || c.strength >= 0.9) out.push(c);
   return out.sort((x, y) => y.strength - x.strength || y.hits - x.hits);
 }
 
@@ -262,8 +317,10 @@ async function saveFound(ctx: Ctx, found: Found[]): Promise<{ scope: string; key
 
 // ---------------------------------------------------------------- fetching
 
-async function fetchPage(ctx: Ctx, url: string, kind: string): Promise<string> {
+export async function fetchPage(ctx: Ctx, url: string, kind: string): Promise<string> {
   if (ctx.cfg.demo) return demoCodePage(kind, url);
+  if (!(await canSpend(ctx, 'web'))) throw new Error('Daily page budget used up');
+  await spend(ctx, 'web');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -291,7 +348,7 @@ interface SearchHit {
   snippet: string;
 }
 
-async function webSearch(ctx: Ctx, query: string): Promise<SearchHit[]> {
+export async function webSearch(ctx: Ctx, query: string): Promise<SearchHit[]> {
   if (ctx.cfg.demo) return demoSearch(query);
   if (!ctx.cfg.braveApiKey) return [];
   const qs = new URLSearchParams({ q: query, count: '10', freshness: 'pm', country: 'CA', search_lang: 'en' });
@@ -398,17 +455,11 @@ export async function scanSources(ctx: Ctx, opts: { force?: boolean } = {}): Pro
   return out;
 }
 
-/** Search budget: Brave's monthly credit covers roughly this many searches a day. */
-const DAILY_SEARCH_BUDGET = 30;
-
 /** 3. Web search for each presale that still needs a code. */
 export async function searchForCodes(ctx: Ctx): Promise<{ searches: number; promoted: Awaited<ReturnType<typeof saveFound>>; errors: string[] }> {
   const out = { searches: 0, promoted: [] as Awaited<ReturnType<typeof saveFound>>, errors: [] as string[] };
   if (!ctx.cfg.braveApiKey && !ctx.cfg.demo) return out;
   const t = now(ctx);
-  const day = new Date(t).toISOString().slice(0, 10);
-  const budget = await getSetting<{ day: string; used: number }>(ctx, 'search_budget', { day, used: 0 });
-  if (budget.day !== day) Object.assign(budget, { day, used: 0 });
 
   const sales = await ctx.db.query<{ id: string; name: string; start_utc: number; artist_id: string; artist: string; city: string | null }>(
     `SELECT s.id, s.name, s.start_utc, e.attraction_ids[1] AS artist_id, e.attraction_names[1] AS artist, e.city
@@ -435,12 +486,12 @@ export async function searchForCodes(ctx: Ctx): Promise<{ searches: number; prom
     const everyMin = until < 2 * 3_600_000 ? 10 : until < 48 * 3_600_000 ? 60 : 12 * 60;
     const queries = [`"${p.artist}" presale code`, `"${p.artist}" "${p.saleName}" code ${p.city ?? ''}`.trim()];
     for (const q of queries) {
-      if (budget.used >= DAILY_SEARCH_BUDGET) break;
+      if (!ctx.cfg.demo && !(await canSpend(ctx, 'brave'))) break;
       const last = await ctx.db.one<{ ran_at: number }>('SELECT ran_at FROM code_searches WHERE query = $1', [q]);
       if (last && t - last.ran_at < everyMin * 60_000) continue;
       try {
         const hits = await webSearch(ctx, q);
-        budget.used++;
+        if (!ctx.cfg.demo) await spend(ctx, 'brave');
         out.searches++;
         const artist = [{ id: p.artistId, name: p.artist }];
         const found: Found[] = [];
@@ -471,7 +522,6 @@ export async function searchForCodes(ctx: Ctx): Promise<{ searches: number; prom
       }
     }
   }
-  await setSetting(ctx, 'search_budget', budget);
   return out;
 }
 

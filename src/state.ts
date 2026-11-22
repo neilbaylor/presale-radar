@@ -95,6 +95,21 @@ export async function buildState(ctx: Ctx, user: User, baseUrl: string) {
     } else shows.push(show);
   }
 
+  // Sign-up deadlines for artists you follow (from Ticketmaster help articles).
+  const signupRows = await ctx.db.query<any>(
+    `SELECT n.artist_id AS "artistId", a.name AS artist, n.label, n.at_utc AS "at", n.url, n.signup_url AS "signupUrl",
+            EXISTS (SELECT 1 FROM job_marks m WHERE m.key = 'signed:' || $1::text || ':' || n.artist_id || ':' || n.label || ':' || n.at_utc) AS done
+       FROM artist_notes n JOIN artists a ON a.id = n.artist_id
+      WHERE n.kind = 'signup_deadline' AND n.at_utc > $2
+        AND EXISTS (SELECT 1 FROM user_artists ua WHERE ua.user_id = $1::bigint AND ua.artist_id = n.artist_id AND ua.mode = 'follow')
+      ORDER BY n.at_utc`,
+    [user.id, t],
+  );
+  const venuePages = await ctx.db.query(
+    `SELECT p.url, p.venue_id AS "venueId", v.name AS venue, p.label, p.last_checked AS "lastChecked", p.last_error AS "lastError", p.last_found AS "lastFound"
+       FROM venue_pages p LEFT JOIN venues v ON v.id = p.venue_id ORDER BY v.name NULLS LAST, p.url`,
+  );
+  const budgets = await ctx.db.query<{ provider: string; calls: number }>(`SELECT provider, calls FROM api_usage WHERE day = $1`, [new Date(t).toISOString().slice(0, 10)]);
   const calendar = await ctx.db.one<any>(
     `SELECT provider, username, status, last_error AS "lastError", last_sync AS "lastSync",
             (SELECT COUNT(*)::int FROM calendar_items i WHERE i.user_id = a.user_id) AS events
@@ -158,5 +173,8 @@ export async function buildState(ctx: Ctx, user: User, baseUrl: string) {
     },
     calendarUrl: `${baseUrl}/cal/${user.calendar_token}.ics`,
     calendar: calendar ?? null,
+    signups: signupRows,
+    venuePages,
+    budgets: Object.fromEntries(budgets.map((b) => [b.provider, b.calls])),
   };
 }

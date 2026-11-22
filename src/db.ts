@@ -159,27 +159,86 @@ export async function setUserEvent(
 // ---------------------------------------------------------------- sources
 
 /** Venues and artists at least one person follows and that are due for a refresh. */
-export async function dueSources(ctx: Ctx, intervalMin: number, limit = 500): Promise<Source[]> {
-  const cutoff = now(ctx) - intervalMin * 60_000;
+export async function dueSources(ctx: Ctx, _intervalMin?: number, limit = 500): Promise<Source[]> {
   const rows = await ctx.db.query<{ type: 'venue' | 'artist'; id: string; name: string; last_synced: number | null }>(
     `SELECT * FROM (
-       SELECT 'venue' AS type, v.id, v.name, v.last_synced FROM venues v
+       SELECT 'venue' AS type, v.id, v.name, v.last_synced, v.next_sync FROM venues v
         WHERE EXISTS (SELECT 1 FROM user_venues uv WHERE uv.venue_id = v.id)
        UNION ALL
-       SELECT 'artist' AS type, a.id, a.name, a.last_synced FROM artists a
+       SELECT 'artist' AS type, a.id, a.name, a.last_synced, a.next_sync FROM artists a
         WHERE EXISTS (SELECT 1 FROM user_artists ua WHERE ua.artist_id = a.id AND ua.mode = 'follow')
      ) s
-     WHERE last_synced IS NULL OR last_synced < $1
-     ORDER BY last_synced ASC NULLS FIRST
+     WHERE COALESCE(next_sync, 0) <= $1
+     ORDER BY next_sync ASC NULLS FIRST
      LIMIT $2`,
-    [cutoff, limit],
+    [now(ctx), limit],
   );
   return rows.map((r) => ({ type: r.type, id: r.id, name: r.name, lastSynced: r.last_synced }));
 }
 
-export async function markSourceSynced(ctx: Ctx, s: Source, error: string | null): Promise<void> {
+/** Weekday mornings in Toronto, when tours are usually announced and presales open. */
+export function inAnnouncementWindow(ms: number, timeZone: string): boolean {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', hour: 'numeric', hourCycle: 'h23' })
+    .formatToParts(new Date(ms))
+    .reduce<Record<string, string>>((a, x) => ((a[x.type] = x.value), a), {});
+  const hour = Number(p.hour) % 24;
+  return !['Sat', 'Sun'].includes(p.weekday) && hour >= 9 && hour < 12;
+}
+
+/**
+ * How long until a source should be checked again:
+ *   15 min  if it has a sale in the next 48 hours or changed in the last day
+ *   60 min  normally (SYNC_INTERVAL_MIN)
+ *   3 hours if nothing changed for a week
+ * Weekday mornings cap it at 20 minutes, failures back off (5, 10, 20... up to 6 hours),
+ * a busy daily budget triples it, and ±10% jitter spreads the load.
+ */
+export function nextSyncDelayMin(o: {
+  base: number;
+  hot: boolean;
+  lastChange: number | null;
+  firstSync: number | null;
+  t: number;
+  announcement: boolean;
+  failCount: number;
+  budgetRatio: number;
+  jitter?: number; // -1..1, injectable for tests
+}): number {
+  if (o.failCount > 0) return Math.min(5 * 2 ** (o.failCount - 1), 360);
+  const quietSince = o.lastChange ?? o.firstSync ?? o.t;
+  let m = o.hot || (o.lastChange && o.t - o.lastChange < 86_400_000) ? 15 : o.t - quietSince > 7 * 86_400_000 ? 180 : o.base;
+  if (o.announcement) m = Math.min(m, 20);
+  if (o.budgetRatio > 0.8) m *= 3;
+  const j = o.jitter ?? Math.random() * 2 - 1;
+  return Math.max(5, Math.round(m * (1 + 0.1 * j)));
+}
+
+export async function markSourceSynced(ctx: Ctx, s: Source, error: string | null, changed = false, budgetRatio = 0): Promise<void> {
   const table = s.type === 'venue' ? 'venues' : 'artists';
-  await ctx.db.query(`UPDATE ${table} SET last_synced = $1, last_error = $2 WHERE id = $3`, [now(ctx), error, s.id]);
+  const t = now(ctx);
+  const row = await ctx.db.one<{ fail_count: number; last_change: number | null }>(`SELECT fail_count, last_change FROM ${table} WHERE id = $1`, [s.id]);
+  const failCount = error ? (row?.fail_count ?? 0) + 1 : 0;
+  const lastChange = changed ? t : row?.last_change ?? null;
+  const hot = await ctx.db.one(
+    `SELECT 1 FROM sales sa JOIN events e ON e.id = sa.event_id
+      WHERE sa.removed = FALSE AND sa.start_utc BETWEEN $1 AND $2
+        AND ${s.type === 'venue' ? 'e.venue_id = $3' : '$3 = ANY(e.attraction_ids)'} LIMIT 1`,
+    [t, t + 48 * 3_600_000, s.id],
+  );
+  const delay = nextSyncDelayMin({
+    base: ctx.cfg.syncIntervalMin,
+    hot: !!hot,
+    lastChange,
+    firstSync: s.lastSynced,
+    t,
+    announcement: inAnnouncementWindow(t, ctx.cfg.timeZone),
+    failCount,
+    budgetRatio,
+  });
+  await ctx.db.query(
+    `UPDATE ${table} SET last_synced = $1, last_error = $2, fail_count = $3, last_change = $4, next_sync = $5 WHERE id = $6`,
+    [t, error, failCount, lastChange, t + delay * 60_000, s.id],
+  );
 }
 
 export async function prune(ctx: Ctx): Promise<void> {

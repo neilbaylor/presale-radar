@@ -328,3 +328,6 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .launch-go { appearance: none; border: 0; background: #fff; color: #111; border-radius: 18px; min-height: 62px; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
 .launch-go svg { width: 20px; height: 20px; }
 .launch-foot { font-size: 12px; opacity: .8; margin-top: 12px; }
+
+.ic-dot { width: 34px; height: 34px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); display: flex; align-items: center; justify-content: center; flex: none; }
+.ic-dot svg { width: 18px; height: 18px; }

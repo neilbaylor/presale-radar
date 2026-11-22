@@ -19,6 +19,8 @@ import { connectICloud, disconnectCalendar, scheduleCalendarSync } from './calsy
 import { linkSig } from './secrets.js';
 import { setSetting } from './db.js';
 import { DavError } from './caldav.js';
+import { signedUpKey } from './help.js';
+import { checkVenuePages } from './venuepages.js';
 
 type Env = { Variables: { user: User } };
 
@@ -477,6 +479,41 @@ export function createApp(ctx: Ctx) {
   });
 
   app.post('/api/digest/preview', async (c) => c.json({ sent: await previewDigest(ctx, c.get('user').id) }));
+
+  // ---- sign-up deadlines
+
+  app.post('/api/signups/done', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const key = signedUpKey(c.get('user').id, String(b.artistId ?? ''), String(b.label ?? ''), Number(b.at));
+    if (b.done === false) await ctx.db.query('DELETE FROM job_marks WHERE key = $1', [key]);
+    else await ctx.db.query('INSERT INTO job_marks (key, at) VALUES ($1, $2) ON CONFLICT DO NOTHING', [key, now(ctx)]);
+    return c.json({ ok: true });
+  });
+
+  // ---- venue websites
+
+  app.post('/api/venue-pages', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    let url: URL;
+    try {
+      url = new URL(String(b.url ?? '').trim());
+      if (!/^https?:$/.test(url.protocol)) throw new Error();
+    } catch {
+      return c.json({ error: 'Enter the full address of the venue\'s events page, starting with https://' }, 400);
+    }
+    await ctx.db.query(
+      `INSERT INTO venue_pages (url, venue_id, label, added_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (url) DO UPDATE SET venue_id = excluded.venue_id, next_check = NULL`,
+      [url.toString(), b.venueId || null, String(b.label ?? url.hostname).slice(0, 80), c.get('user').id],
+    );
+    const r = await checkVenuePages(ctx, { force: true, url: url.toString() });
+    return c.json({ ok: true, found: r.found, added: r.added, error: r.errors[0] ?? null });
+  });
+
+  app.delete('/api/venue-pages', async (c) => {
+    await ctx.db.query('DELETE FROM venue_pages WHERE url = $1', [c.req.query('url') ?? '']);
+    return c.json({ ok: true });
+  });
 
   // ---- calendar sync
 

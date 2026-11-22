@@ -14,6 +14,7 @@ import { upsertEvent, type Change } from './sync.js';
 import { enqueue } from './notify.js';
 import { demoSeatGeek } from './demo.js';
 import { sleep } from './util.js';
+import { canSpend, spend } from './budget.js';
 
 const ROOT = 'https://api.seatgeek.com/2/';
 let lastCall = 0;
@@ -26,6 +27,8 @@ async function sgGet(ctx: Ctx, path: string, params: Record<string, string | num
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') qs.set(k, String(v));
   if (ctx.cfg.demo) return demoSeatGeek(path, qs, now(ctx));
+  if (!(await canSpend(ctx, 'seatgeek'))) throw new Error('SeatGeek daily budget used up');
+  await spend(ctx, 'seatgeek');
   qs.set('client_id', ctx.cfg.seatgeekClientId!);
   const wait = lastCall + 300 - Date.now();
   if (wait > 0) await sleep(wait);

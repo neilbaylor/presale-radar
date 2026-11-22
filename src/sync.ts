@@ -178,7 +178,7 @@ export interface SyncResult {
   error?: string;
 }
 
-export async function syncSource(ctx: Ctx, source: Source): Promise<SyncResult> {
+export async function syncSource(ctx: Ctx, source: Source, budgetRatio = 0): Promise<SyncResult> {
   const label = `${source.type}:${source.name}`;
   try {
     const raw = await fetchEventsForSource(ctx.cfg, source, ctx.cfg.musicOnly);
@@ -190,11 +190,11 @@ export async function syncSource(ctx: Ctx, source: Source): Promise<SyncResult> 
       changes.push(...(await upsertEvent(ctx, event, sales, source.lastSynced === null)));
       count++;
     }
-    await markSourceSynced(ctx, source, null);
+    await markSourceSynced(ctx, source, null, changes.length > 0, budgetRatio);
     return { source: label, events: count, changes };
   } catch (err: any) {
     const message = String(err?.message ?? err);
-    await markSourceSynced(ctx, source, message.slice(0, 300));
+    await markSourceSynced(ctx, source, message.slice(0, 300), false, budgetRatio);
     if (err instanceof TmError && (err.status === 401 || err.status === 0)) throw err; // bad or missing key: stop the run
     return { source: label, events: 0, changes: [], error: message };
   }

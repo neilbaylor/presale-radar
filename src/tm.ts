@@ -7,6 +7,14 @@ const ROOT = 'https://app.ticketmaster.com/discovery/v2/';
 /** Ticketmaster allows 5 requests/second; keep a safe gap between calls. */
 const MIN_GAP_MS = 230;
 let lastCall = 0;
+let callsSinceTake = 0;
+
+/** Real Ticketmaster requests made since the last call to this (for the daily budget). */
+export function takeTmCalls(): number {
+  const n = callsSinceTake;
+  callsSinceTake = 0;
+  return n;
+}
 
 export class TmError extends Error {
   constructor(message: string, readonly status: number) {
@@ -25,11 +33,13 @@ export async function tmGet(cfg: Config, path: string, params: Record<string, st
   const wait = lastCall + MIN_GAP_MS - Date.now();
   if (wait > 0) await sleep(wait);
   lastCall = Date.now();
+  callsSinceTake++;
 
   let res = await fetch(`${ROOT}${path}?${qs}`, { headers: { accept: 'application/json' } });
   if (res.status === 429) {
     await sleep(1200);
     lastCall = Date.now();
+    callsSinceTake++;
     res = await fetch(`${ROOT}${path}?${qs}`, { headers: { accept: 'application/json' } });
   }
   if (!res.ok) {

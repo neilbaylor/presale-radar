@@ -464,7 +464,12 @@ document.addEventListener('submit', async (e) => {
     else if (kind === 'login') await api('/api/auth/login', { body: data });
     else if (kind === 'join') await api('/api/auth/join', { body: { ...data, token: S.route.params.token } });
     else if (kind === 'code') return await saveCode(form, data);
-    else if (kind === 'icloud') {
+    else if (kind === 'venue-page') {
+      const r = await api('/api/venue-pages', { body: data });
+      await loadState();
+      closeSheet();
+      return toast(r.error ? `Added, but: ${r.error}` : r.found ? `Found ${r.found} show${r.found === 1 ? '' : 's'}${r.added ? `, ${r.added} not on Ticketmaster` : ''}` : 'Added. No listings found yet.');
+    } else if (kind === 'icloud') {
       const r = await api('/api/calendar/icloud', { body: data });
       await loadState();
       closeSheet();
@@ -651,6 +656,7 @@ function viewHome() {
     <div class="topbar"><div class="title">Sales</div>${S.state.features.demo ? `<button class="btn sm soft" data-act="demo-tick">${I.refresh} Demo tick</button>` : ''}</div>
     ${pushNudge()}
     ${next ? heroCard(next) : ''}
+    ${signupSection()}
     ${deck.length ? deckCard(deck) : ''}
     ${resaleDeals().length ? resaleSection(resaleDeals()) : ''}
     ${rest.length ? `<div class="section"><div class="section-head"><h2>Coming up</h2>${S.ui.day !== keys[0] ? `<button class="link-btn" data-act="pick-day" data-k="${keys[0]}">Today</button>` : ''}</div>${strip}<div style="margin-top:12px">${dayList}</div></div>` : ''}
@@ -661,6 +667,33 @@ function viewHome() {
     }</div>` : ''}
     ${empty}
   </div>`;
+}
+
+function openSignups(artistId) {
+  return (S.state.signups ?? []).filter((n) => !n.done && n.at > now() && (!artistId || n.artistId === artistId));
+}
+
+function signupSection() {
+  const list = openSignups().filter((n) => n.at - now() < 14 * DAY);
+  if (!list.length) return '';
+  return `<div class="section"><div class="section-head"><h2>Sign up before it closes</h2></div><div class="list">${list
+    .map(
+      (n) => `<div class="item"><div class="ic-dot">${I.flag}</div><div class="grow"><div class="ellipsis"><b>${esc(n.artist)}</b></div>
+        <div class="small ellipsis" style="color:var(--warn);font-weight:600">Closes ${fmtDay(n.at)}, ${fmtTime(n.at)}</div>
+        <div class="tiny faint ellipsis">${esc(n.label.replace(/^the /i, ''))}</div></div>
+        <button class="icon-btn" data-act="signup-done" data-artist="${esc(n.artistId)}" data-label="${esc(n.label)}" data-at="${n.at}" aria-label="I'm signed up">${I.check}</button>
+        <a class="btn sm primary" href="${esc(n.signupUrl ?? n.url)}" target="_blank" rel="noopener">Sign up</a></div>`,
+    )
+    .join('')}</div></div>`;
+}
+
+function signupBanner(artistId) {
+  const n = openSignups(artistId)[0];
+  if (!n) return '';
+  return `<div class="banner warn" style="margin-top:14px">${I.flag}<div class="grow"><b>${esc(n.label)}: sign up by ${fmtDay(n.at)}, ${fmtTime(n.at)}</b>
+    <div class="small muted">No sign-up, no code.</div>
+    <div class="row" style="margin-top:8px"><a class="btn sm primary" href="${esc(n.signupUrl ?? n.url)}" target="_blank" rel="noopener">Sign up</a>
+    <button class="btn sm ghost" data-act="signup-done" data-artist="${esc(n.artistId)}" data-label="${esc(n.label)}" data-at="${n.at}">I'm signed up</button></div></div></div>`;
 }
 
 function deckCard(list) {
@@ -1025,7 +1058,7 @@ function showRow(s) {
         : `<span class="chev">${I.chev}</span>`;
   return `<div class="item tap" data-act="nav" data-href="#/show/${encodeURIComponent(s.id)}">
     <div class="date-block">${s.date ? `<div class="m">${fmtLocalDate(s.date, { weekday: 'short' })}</div><div class="d">${fmtLocalDate(s.date, { day: 'numeric' })}</div>` : '<div class="m">TBA</div>'}</div>
-    <div class="grow"><div class="row" style="gap:6px"><b class="ellipsis">${esc(s.artist)}</b>${badge}</div><div class="small muted ellipsis">${esc(s.venue ?? '')}${s.source === 'seatgeek' ? ' · via SeatGeek' : nextSaleText(s)}${s.resale?.watching && s.resale.low != null ? ` · resale $${Math.round(s.resale.low)}` : ''}</div></div>
+    <div class="grow"><div class="row" style="gap:6px"><b class="ellipsis">${esc(s.artist)}</b>${badge}</div><div class="small muted ellipsis">${esc(s.venue ?? '')}${s.source === 'seatgeek' ? ' · via SeatGeek' : s.source === 'web' ? ` · venue site${nextSaleText(s)}` : nextSaleText(s)}${s.resale?.watching && s.resale.low != null ? ` · resale $${Math.round(s.resale.low)}` : ''}</div></div>
     ${right}</div>`;
 }
 
@@ -1077,14 +1110,15 @@ function viewShow(id) {
     </div>
     ${s.availability === 'TICKETS_NOT_AVAILABLE' && !s.gotTickets && S.state.features.soldOutWatch
       ? `<div class="card row" style="margin-top:14px">${I.radar}<div class="grow"><b>Sold-out watch</b><div class="small muted">Urgent ping if seats are released</div></div><input type="checkbox" class="switch" data-act="watch" data-id="${esc(s.id)}" ${s.watchSoldout ? 'checked' : ''}></div>` : ''}
+    ${s.artistId ? signupBanner(s.artistId) : ''}
     ${resaleCard(s)}
-    ${s.source === 'seatgeek'
-      ? `<div class="section"><div class="banner">${I.info}<span>Not sold on Ticketmaster. Found through SeatGeek, so there are no presale times. Check the venue's site for tickets.</span></div></div>`
+    ${s.source === 'seatgeek' || s.source === 'web'
+      ? `<div class="section"><div class="banner">${I.info}<span>${s.source === 'web' ? "Found on the venue's website, not Ticketmaster." : 'Not sold on Ticketmaster. Found through SeatGeek.'} ${s.sales.length ? '' : 'There are no presale times, so check the venue for tickets.'}</span></div></div>`
       : `<div class="section"><div class="section-head"><h2>Sales</h2></div>
       <div class="card">${sales.length ? sales.map((x) => saleBlock(s, x)).join('') : '<p class="muted">No upcoming sales. Tickets may already be on sale.</p>'}</div>
       ${past.length ? `<p class="faint small" style="margin:10px 4px">Ended: ${past.map((p) => esc(p.name)).join(', ')}</p>` : ''}
     </div>`}
-    ${s.url && s.source !== 'seatgeek' ? `<div class="section"><a class="btn dark big block" href="${esc(s.url)}" target="_blank" rel="noopener">Open on Ticketmaster ${I.external}</a></div>` : ''}
+    ${s.url ? `<div class="section"><a class="btn dark big block" href="${esc(s.url)}" target="_blank" rel="noopener">${s.source === 'ticketmaster' ? 'Open on Ticketmaster' : s.source === 'web' ? 'Open venue page' : 'Open on SeatGeek'} ${I.external}</a></div>` : ''}
   </div>`;
 }
 
@@ -1150,7 +1184,8 @@ function viewGo(saleId) {
       <h1 style="margin-top:6px">${esc(show.artist)}</h1>
       <div class="muted">${esc(show.venue ?? '')} · ${fmtLocalDate(show.date)}</div>
     </div>
-    <div class="card stack" style="gap:16px;padding:20px">
+    ${S.state && show.artistId && phase === 'prep' ? signupBanner(show.artistId) : ''}
+    <div class="card stack" style="gap:16px;padding:20px${S.state && show.artistId && phase === 'prep' && openSignups(show.artistId).length ? ';margin-top:14px' : ''}">
       <div>${headline}</div>
       ${phase === 'over' && !codes.length ? '' : codeSection(sale, codes)}
       ${cta}
@@ -1241,7 +1276,11 @@ function checklistItems(sale, best) {
     { id: 'signin', label: 'Signed in to the Ticketmaster app', hint: 'Sessions expire. Check now, not at 9:59.' },
     { id: 'pay', label: 'Card saved and up to date' },
   ];
-  if (sale.requirement === 'register') items.push({ id: 'reg', label: 'Registered for this presale', hint: 'Verified Fan and similar need sign-up ahead of time.' });
+  if (sale.requirement === 'register') {
+    const show = findSale(sale.id)?.show;
+    const n = show?.artistId ? (S.state?.signups ?? []).find((x) => x.artistId === show.artistId && x.at > now()) : null;
+    items.push({ id: 'reg', label: 'Registered for this presale', hint: n ? `Sign-up closes ${fmtDay(n.at)}, ${fmtTime(n.at)}.` : 'Verified Fan and similar need sign-up ahead of time.', auto: !!n?.done });
+  }
   if (sale.requirement === 'card') items.push({ id: 'card', label: 'Eligible card saved in Ticketmaster' });
   if (sale.kind === 'presale' && sale.requirement !== 'card') items.push({ id: 'code', label: best ? `Code ready: ${best.code}` : 'Code ready', auto: !!best });
   items.push({ id: 'plan', label: 'Know your budget and how many tickets', hint: 'Decide now so you can grab seats fast.' });
@@ -1270,7 +1309,7 @@ function afterSale(show, nextSale) {
 
 // ============================================================ activity
 
-const ACT_ICON = { resale_deal: I.tag, new_show: I.music, new_sale: I.ticket, time_change: I.clock, status_change: I.alert, reminder: I.zap, code_found: I.key, tickets_back: I.radar };
+const ACT_ICON = { signup: I.flag, resale_deal: I.tag, new_show: I.music, new_sale: I.ticket, time_change: I.clock, status_change: I.alert, reminder: I.zap, code_found: I.key, tickets_back: I.radar };
 
 function viewActivity() {
   const list = S.state.activity;
@@ -1361,6 +1400,17 @@ function viewSettings() {
       ${st.artistCodes.length ? `<div class="item tap" data-act="sheet" data-kind="saved-codes">${I.key}<div class="grow">Your saved codes</div><span class="muted">${st.artistCodes.length}</span><span class="chev">${I.chev}</span></div>` : ''}
     </div><p class="tiny faint" style="margin:8px 4px">Checks Ticketmaster's own presale text, the official Live Nation password, ${f.webSearch ? 'web searches for each upcoming presale, ' : ''}and these pages. Scans get more frequent as a presale gets close.</p></div>
 
+    <div class="section"><div class="section-head"><h2>Venue websites</h2></div><div class="list">
+      ${(st.venuePages ?? [])
+        .map(
+          (p) => `<div class="item"><div class="grow"><div class="ellipsis small"><b style="font-weight:600">${esc(p.venue ?? p.label ?? new URL(p.url).hostname)}</b></div>
+          <div class="tiny ${p.lastError ? '' : 'faint'}" style="${p.lastError ? 'color:var(--bad)' : ''}">${p.lastError ? esc(p.lastError) : p.lastChecked ? `Checked ${ago(p.lastChecked)} · ${p.lastFound} shows` : 'Checking…'}</div></div>
+          <button class="icon-btn plain" data-act="del-venue-page" data-url="${esc(p.url)}" aria-label="Remove">${I.trash}</button></div>`,
+        )
+        .join('')}
+      <div class="item tap" data-act="sheet" data-kind="add-venue-page">${I.plus}<div class="grow">Add a venue's events page<div class="small muted">Catches shows sold outside Ticketmaster</div></div></div>
+    </div></div>
+
     ${st.me.role === 'owner' ? `<div class="section"><div class="section-head"><h2>People</h2></div><div class="list">
       ${st.members.map((m) => `<div class="item">${I.user}<div class="grow"><b style="font-weight:600">${esc(m.name)}</b>${m.role === 'owner' ? ' <span class="pill">Owner</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>${m.role !== 'owner' ? `<button class="icon-btn plain" data-act="del-user" data-id="${m.id}" data-name="${esc(m.name)}" aria-label="Remove">${I.trash}</button>` : ''}</div>`).join('')}
       <div class="item tap" data-act="invite">${I.plus}<div class="grow">Invite someone</div></div>
@@ -1370,6 +1420,16 @@ function viewSettings() {
     <div class="section"><div class="section-head"><h2>Status</h2>${sync?.lastEnd ? `<span class="tiny faint">Synced ${ago(sync.lastEnd)}</span>` : ''}</div>
       ${issues.length ? `<div class="stack" style="gap:8px">${issues.map((i) => `<div class="banner warn">${I.alert}<span>${i}</span></div>`).join('')}</div>` : `<div class="banner">${I.done}<span>Everything is connected.</span></div>`}
       ${st.venues.concat(st.artists).some((x) => x.lastError) ? `<p class="small" style="color:var(--bad);margin:8px 4px">Some sources failed on their last sync. They retry automatically.</p>` : ''}
+      <div class="list" style="margin-top:10px">
+        ${[['ticketmaster', 'Ticketmaster', 4500], ['seatgeek', 'SeatGeek', 5000], ['brave', 'Web searches', 30], ['web', 'Web pages', 3000]]
+          .filter(([k]) => k !== 'seatgeek' || f.seatgeek)
+          .map(([k, label, limit]) => {
+            const used = st.budgets?.[k] ?? 0;
+            return `<div class="item"><div class="grow small">${label} today</div><div class="small muted">${used.toLocaleString()} / ${limit.toLocaleString()}</div></div>`;
+          })
+          .join('')}
+      </div>
+      <p class="tiny faint" style="margin:8px 4px">Checks run more often near sales and on weekday mornings, when tours are announced, and less often for quiet venues. Each sale you care about is re-checked 45 and 10 minutes before it starts.</p>
       <button class="btn block soft" style="margin-top:10px" data-act="refresh-now">${I.refresh} Check for new shows now</button>
     </div>
 
@@ -1426,6 +1486,12 @@ function sheetHtml() {
       <form class="stack" data-form="source"><div class="field"><label>Web address</label><input class="input" name="url" type="url" inputmode="url" placeholder="https://" required></div>
       <div class="field"><label>Name (optional)</label><input class="input" name="label" placeholder="Fan forum"></div><div class="error"></div>
       <button class="btn primary block" type="submit">Add page</button></form>`;
+  } else if (sh.kind === 'add-venue-page') {
+    body = `<h2>Add a venue's events page</h2><p class="small muted" style="margin:4px 0 14px">Paste the page on the venue's site that lists upcoming shows. Most sites include machine-readable listings. An .ics calendar link works too.</p>
+      <form class="stack" data-form="venue-page" novalidate>
+        <div class="field"><label>Events page</label><input class="input" name="url" type="url" inputmode="url" placeholder="https://venue.com/events" required></div>
+        <div class="field"><label>Which venue is it?</label><select class="input" name="venueId"><option value="">Not one of my venues</option>${st.venues.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('')}</select></div>
+        <div class="error"></div><button class="btn primary block" type="submit">Add and check now</button></form>`;
   } else if (sh.kind === 'icloud') {
     body = `<h2>Connect iPhone Calendar</h2><p class="small muted" style="margin:4px 0 14px">Presale Radar adds a "Presales" calendar to your iCloud and keeps it up to date. Apple needs an app-specific password, which only works for calendars and can be revoked any time.</p>
       <div class="ios-steps small" style="margin-bottom:16px">
@@ -1560,6 +1626,11 @@ const handlers = {
       msg: next ? 'Enjoy the show! Reminders stopped.' : 'Unmarked',
     });
   },
+  'signup-done': (el) =>
+    mutate(() => api('/api/signups/done', { body: { artistId: el.dataset.artist, label: el.dataset.label, at: Number(el.dataset.at) } }), {
+      msg: "Got it. No more sign-up reminders for this one.",
+    }),
+  'del-venue-page': (el) => mutate(() => api(`/api/venue-pages?url=${encodeURIComponent(el.dataset.url)}`, { method: 'DELETE' }), { msg: 'Removed' }),
   'pick-day': (el) => {
     S.ui.day = el.dataset.k;
     render();

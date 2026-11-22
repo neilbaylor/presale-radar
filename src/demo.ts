@@ -122,6 +122,8 @@ export function demoFetch(path: string, qs: URLSearchParams): any {
     }));
     return { _embedded: { attractions: list }, page: { totalPages: 1 } };
   }
+  const detail = path.match(/^events\/(.+)\.json$/);
+  if (detail) return allEvents(now).find((e) => e.id === detail[1]) ?? {};
   if (path === 'events.json') {
     let list = allEvents(now);
     const venueId = qs.get('venueId');
@@ -133,7 +135,32 @@ export function demoFetch(path: string, qs: URLSearchParams): any {
   return {};
 }
 
+function demoWhen(ms: number): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/Toronto', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(ms));
+}
+
 export function demoCodePage(kind: string, url = ''): string {
+  const t = Date.now();
+  if (kind === 'help') {
+    const artist = ARTISTS.find((a) => url.endsWith(a.id)) ?? ARTISTS[0];
+    return `<html><body><h1>${artist.name} Presale Information</h1>
+      <h2>Verified Fan Presale</h2>
+      <p>You can sign up any time before ${demoWhen(t + 2 * DAY)} at 10:00 p.m. ET. <a href="https://signup.ticketmaster.ca/demo">Sign up here</a>.</p>
+      <p>The Verified Fan Presale begins on ${demoWhen(t + 4 * DAY)} at 10:00 a.m. local venue time.</p>
+      <p>The general sale starts on ${demoWhen(t + 5 * DAY)} at 10:00 a.m. local venue time.</p></body></html>`;
+  }
+  if (kind === 'venue') {
+    const iso = (ms: number) => new Date(ms).toISOString().slice(0, 16);
+    return `<html><head><script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org',
+      '@graph': [
+        { '@type': 'MusicEvent', name: 'Harbourfront Sessions: Lily Pad Choir', startDate: iso(t + 33 * DAY), location: { '@type': 'Place', name: 'The Opera House' },
+          url: 'https://venue.example/events/lily-pad', offers: { '@type': 'Offer', price: '28', availabilityStarts: iso(t + 2 * DAY) } },
+        { '@type': 'MusicEvent', name: 'Midnight Ferry', startDate: iso(t + 47 * DAY), location: { name: 'The Opera House' }, performer: { name: 'Midnight Ferry' },
+          offers: [{ '@type': 'Offer', price: 35, validFrom: iso(t - DAY), availability: 'https://schema.org/InStock' }] },
+      ],
+    })}</script></head><body>Events</body></html>`;
+  }
   if (kind === 'livenation') {
     return '<html><body><h2>Live Nation Presale</h2><p>Need the Live Nation presale password? Use <strong>HYPED</strong> or <strong>SETBREAK</strong>.</p></body></html>';
   }
@@ -154,6 +181,8 @@ export function demoSearch(query: string): { url: string; title: string; snippet
   const q = query.toLowerCase();
   const artist = ARTISTS.find((a) => q.includes(a.name.toLowerCase()));
   if (!artist) return [];
+  if (q.includes('help.ticketmaster'))
+    return [{ url: `https://help.ticketmaster.ca/demo/${artist.id}`, title: `${artist.name} Presale Information`, snippet: `Everything you need to know about the ${artist.name} presales.` }];
   return [
     { url: 'https://example-forum.test/thread/presales', title: `${artist.name} presale code?`, snippet: `Fans sharing the ${artist.name} presale code for the Toronto dates.` },
     { url: 'https://example-blog.test/presale-codes', title: 'Presale codes this week', snippet: `Roundup of codes including ${artist.name}.` },

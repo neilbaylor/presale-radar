@@ -11,18 +11,20 @@
  */
 import type { Ctx } from './types.js';
 import { dueSources, getAllFollows, getSetting, now, prune, setSetting } from './db.js';
+import { canSpend, spend, usage } from './budget.js';
 import { fanOut, syncSource, type Change } from './sync.js';
 import { checkAvailability } from './availability.js';
 import { runReminders } from './reminders.js';
 import { findCodes } from './codes.js';
 import { deliver } from './notify.js';
-import { TmError } from './tm.js';
+import { TmError, takeTmCalls } from './tm.js';
+import { precheckSales } from './precheck.js';
+import { checkHelpArticles, remindSignups } from './help.js';
+import { checkVenuePages } from './venuepages.js';
 import { checkResale, syncSeatGeek } from './seatgeek.js';
 import { syncAllCalendars } from './calsync.js';
 
 const LOCK_KEY = 7_321_001;
-/** Stay under Ticketmaster's 5,000 calls/day. */
-const TM_DAILY_SOFT_LIMIT = 4_500;
 
 async function step<T>(ctx: Ctx, name: string, fn: () => Promise<T>): Promise<T | { error: string }> {
   const start = now(ctx);
@@ -47,20 +49,16 @@ async function step<T>(ctx: Ctx, name: string, fn: () => Promise<T>): Promise<T 
 }
 
 export async function syncDue(ctx: Ctx, opts: { limit?: number } = {}) {
-  const day = new Date(now(ctx)).toISOString().slice(0, 10);
-  const usage = await getSetting<{ day: string; calls: number }>(ctx, 'tm_usage', { day, calls: 0 });
-  if (usage.day !== day) Object.assign(usage, { day, calls: 0 });
-  // Back off to every 3 hours if we're burning through the daily quota.
-  const interval = usage.calls > TM_DAILY_SOFT_LIMIT * 0.8 ? 180 : ctx.cfg.syncIntervalMin;
-  if (usage.calls >= TM_DAILY_SOFT_LIMIT) return { skipped: 'daily Ticketmaster quota nearly used' };
-
-  const sources = await dueSources(ctx, interval, opts.limit ?? 120);
+  const u = await usage(ctx, 'ticketmaster');
+  if (u.calls >= u.limit) return { skipped: 'daily Ticketmaster budget used up; resuming tomorrow' };
+  const sources = await dueSources(ctx, undefined, opts.limit ?? 120);
   const changes: Change[] = [];
   const errors: string[] = [];
   let events = 0;
+  takeTmCalls();
   for (const s of sources) {
     try {
-      const r = await syncSource(ctx, s);
+      const r = await syncSource(ctx, s, u.ratio);
       events += r.events;
       changes.push(...r.changes);
       if (r.error) errors.push(`${r.source}: ${r.error}`);
@@ -70,10 +68,11 @@ export async function syncDue(ctx: Ctx, opts: { limit?: number } = {}) {
         break;
       }
       throw err;
+    } finally {
+      await spend(ctx, 'ticketmaster', takeTmCalls());
     }
-    usage.calls += 1;
+    if (!(await canSpend(ctx, 'ticketmaster'))) break;
   }
-  await setSetting(ctx, 'tm_usage', usage);
   const queued = await fanOut(ctx, changes, await getAllFollows(ctx));
   return { sources: sources.length, events, changes: changes.length, queued, errors: errors.slice(0, 5) };
 }
@@ -82,6 +81,10 @@ export async function tick(ctx: Ctx): Promise<Record<string, unknown> | null> {
   return ctx.db.withLock(LOCK_KEY, async () => {
     const summary: Record<string, unknown> = {};
     summary.sync = await step(ctx, 'sync', () => syncDue(ctx));
+    summary.precheck = await step(ctx, 'precheck', () => precheckSales(ctx));
+    summary.venuePages = await step(ctx, 'venue_pages', () => checkVenuePages(ctx));
+    summary.help = await step(ctx, 'help_articles', () => checkHelpArticles(ctx));
+    summary.signups = await step(ctx, 'signups', () => remindSignups(ctx));
     summary.seatgeek = await step(ctx, 'seatgeek', async () => {
       const r = await syncSeatGeek(ctx);
       const queued = await fanOut(ctx, r.changes);
