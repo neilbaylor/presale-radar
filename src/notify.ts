@@ -172,6 +172,7 @@ async function deliverDigest(ctx: Ctx, user: User, t: number, force = false): Pr
   const other = items.length - (counts.get('new_show') ?? 0) - (counts.get('new_sale') ?? 0) - (counts.get('code_found') ?? 0);
   if (other > 0) summary.push(plural(other, 'other update'));
   if (summary.length) lines.push(summary.join(' · '));
+  if (tomorrow.length) lines.push('Sign in to Ticketmaster tonight so you’re ready.');
 
   await pushToUser(ctx, user.id, {
     title: tomorrow.length ? `Tomorrow: ${plural(tomorrow.length, 'sale')} for you` : 'Your evening roundup',

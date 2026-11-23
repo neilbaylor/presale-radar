@@ -1239,7 +1239,8 @@ function viewGo(saleId) {
                : best
                  ? 'Paste the code when Ticketmaster asks for it.'
                  : 'Head straight in.'
-         }</p>`;
+         }</p>
+         ${phase === 'prep' || phase === 'soon' ? `<a class="link-btn signin-link" href="${esc(tmOrigin(show, sale))}/user/orders" target="_blank" rel="noopener">Sign in to Ticketmaster ahead of time ${I.external}</a>` : ''}`;
 
   const top = S.guest && S.route.name === 'link'
     ? `<div class="topbar"><div class="row small muted" style="gap:8px"><span class="logo" style="width:28px;height:28px;border-radius:8px">${I.radar}</span>Presale Radar</div><a class="btn sm soft" href="/">Open app</a></div>`
@@ -1260,8 +1261,7 @@ function viewGo(saleId) {
     ${
       phase === 'over' || phase === 'open'
         ? afterSale(show, nextSale)
-        : `${signinCard(sale, show)}
-           <div class="section"><div class="section-head"><h2>Tips</h2></div><div class="card small muted stack" style="gap:8px">
+        : `           <div class="section"><div class="section-head"><h2>Tips</h2></div><div class="card small muted stack" style="gap:8px">
              <div>• Use one device and one tab. Several can get you flagged.</div>
              <div>• Don't refresh in the queue. It can lose your place.</div>
              <div>• Grab good-enough seats fast. Carts expire and the best rarely come back.</div>
@@ -1280,7 +1280,8 @@ function launchView(show, sale, codes) {
     <div class="launch-mid">
       ${open
         ? `<div class="launch-state"><span class="live-dot" style="background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.3)"></span> It's open</div><div class="launch-sub">Go now. Paste the code when asked.</div>`
-        : `<div class="launch-count" data-countdown="${sale.startUtc}">${countdownParts(sale.startUtc)}</div><div class="launch-sub">Join the waiting room now. Your spot is random, not first come.</div>`}
+        : `<div class="launch-count" data-countdown="${sale.startUtc}">${countdownParts(sale.startUtc)}</div><div class="launch-sub">Join the waiting room now. Your spot is random, not first come.</div>
+           <a class="launch-signin" href="${esc(tmOrigin(show, sale))}/user/orders" target="_blank" rel="noopener">Not signed in yet? Sign in first</a>`}
       ${best
         ? `<button class="launch-code" data-act="copy" data-text="${esc(best.code)}"><span class="tiny">Tap to copy code</span><b>${esc(best.code)}</b></button>
            ${codes.length > 1 ? `<div class="launch-alts">${codes.slice(1, 4).map((c) => `<button data-act="copy" data-text="${esc(c.code)}">${esc(c.code)}</button>`).join('')}</div>` : ''}`
@@ -1339,30 +1340,6 @@ function tmOrigin(show, sale) {
     if (/ticketmaster\.|livenation\./.test(u.hostname)) return u.origin;
   } catch {}
   return 'https://www.ticketmaster.ca';
-}
-
-/**
- * We can't read another site's sign-in, so this is a one-tap check: it opens
- * Ticketmaster's orders page, which shows your orders when you're signed in
- * and the sign-in form when you're not.
- */
-function signinCard(sale, show) {
-  const at = loadSignin(sale.id);
-  const fresh = at && now() - at < 12 * 60 * MIN;
-  return `<div class="section"><div class="card signin ${fresh ? 'ok' : ''}">
-    <div class="signin-icon">${fresh ? I.check : I.user}</div>
-    <div class="grow"><div class="label">${fresh ? 'Sign-in checked' : 'Still signed in?'}</div>
-      <div class="small muted">${fresh ? `At ${fmtTime(at)}. Recheck if it's been a while.` : 'Ticketmaster sessions expire. Check now, not last minute.'}</div></div>
-    <button class="btn sm ${fresh ? 'ghost' : 'soft'}" data-act="signin-check" data-sale="${esc(sale.id)}" data-href="${esc(tmOrigin(show, sale))}/user/orders">${fresh ? 'Recheck' : 'Check'}</button>
-  </div></div>`;
-}
-
-function loadSignin(saleId) {
-  try {
-    return Number(localStorage.getItem('tm-signin')) || 0;
-  } catch {
-    return 0;
-  }
 }
 
 function loadChecks(saleId) {
@@ -1776,13 +1753,6 @@ const handlers = {
     const url = found.sale.url || found.show.url;
     if (url) window.open(url, '_blank', 'noopener');
     if (code) toast(`Copied ${code}`);
-  },
-  'signin-check': (el) => {
-    window.open(el.dataset.href, '_blank', 'noopener');
-    try {
-      localStorage.setItem('tm-signin', String(now()));
-    } catch {}
-    setTimeout(render, 400);
   },
   check: (el) => {
     const set = loadChecks(el.dataset.sale);
