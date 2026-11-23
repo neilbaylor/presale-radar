@@ -266,6 +266,7 @@ async function refresh() {
 
 async function boot() {
   S.route = parseRoute();
+  render(); // the loading layout right away, while we check who's signed in
   try {
     await loadAuth();
     if (S.auth.signedIn) await loadState();
@@ -298,18 +299,46 @@ setInterval(() => {
   document.querySelectorAll('[data-rel]').forEach((el) => (el.textContent = relTime(Number(el.dataset.rel))));
 }, 1000);
 
+// ============================================================ loading placeholders
+
+const skLines = (widths) => widths.map((w) => `<span class="sk sk-line" style="width:${w}%"></span>`).join('');
+
+function skeletonApp() {
+  return `<div class="screen" aria-busy="true"><span class="sr-only">Loading</span>
+    <div class="topbar"><span class="sk sk-title"></span></div>
+    <div class="sk" style="height:236px"></div>
+    <div class="section"><div class="section-head"><span class="sk sk-line" style="width:96px"></span></div>
+      <div class="stack" style="gap:12px">${'<div class="sk" style="height:96px"></div>'.repeat(3)}</div></div>
+  </div>
+  <div class="tabs static" aria-hidden="true"><nav>
+    ${[[I.ticket, 'Sales'], [I.music, 'Shows'], [I.bell, 'Activity'], [I.settings, 'Settings']].map(([ic, l], i) => `<span class="tab ${i === 0 ? 'on' : ''}">${ic}<span>${l}</span></span>`).join('')}
+  </nav></div>`;
+}
+
+function skeletonTiles(n) {
+  return Array.from({ length: n }, () => `<div class="sk" style="min-height:72px;border-radius:14px"></div>`).join('');
+}
+
+function skeletonRows(n) {
+  return `<div class="list" aria-busy="true">${Array.from({ length: n }, (_, i) => `<div class="item"><div class="grow stack" style="gap:8px">${skLines([55 - i * 8, 35])}</div></div>`).join('')}</div>`;
+}
+
+function skeletonChips(n) {
+  return `<div class="chips" aria-busy="true">${Array.from({ length: n }, (_, i) => `<span class="sk" style="height:40px;width:${[118, 96, 132, 88, 110, 124, 92, 104][i % 8]}px;border-radius:999px"></span>`).join('')}</div>`;
+}
+
 // ============================================================ render root
 
 function render() {
   if (S.loading) {
-    app.innerHTML = `<div class="center"><div class="spinner"></div></div>`;
+    app.innerHTML = skeletonApp();
     return;
   }
   if (S.route.name === 'link') return renderLink();
   if (S.route.name === 'join' && !S.auth?.signedIn) return renderJoin();
   if (!S.auth?.signedIn) return S.auth?.needsSetup ? renderSetup() : renderLogin();
   if (!S.state) {
-    app.innerHTML = `<div class="center"><div class="spinner"></div></div>`;
+    app.innerHTML = skeletonApp();
     return;
   }
   if (!S.state.me.onboarded) return renderOnboarding();
@@ -437,7 +466,9 @@ function renderLogin() {
 }
 
 async function renderJoin() {
-  app.innerHTML = `<div class="center"><div class="spinner"></div></div>`;
+  app.innerHTML = `<div class="welcome" aria-busy="true"><span class="sk" style="width:64px;height:64px;border-radius:18px"></span>
+    <div class="stack" style="gap:8px"><span class="sk sk-title" style="width:240px"></span><span class="sk sk-line" style="width:80%"></span></div>
+    <div class="stack">${'<span class="sk" style="height:48px;border-radius:12px"></span>'.repeat(3)}</div></div>`;
   let inviter = null;
   try {
     inviter = (await api(`/api/invites/${encodeURIComponent(S.route.params.token)}`)).inviter;
@@ -466,6 +497,7 @@ document.addEventListener('submit', async (e) => {
   const btn = form.querySelector('button[type=submit]');
   try {
     btn.disabled = true;
+    btn.classList.add('busy');
     if (kind === 'setup') await api('/api/auth/setup', { body: data });
     else if (kind === 'login') await api('/api/auth/login', { body: data });
     else if (kind === 'join') await api('/api/auth/join', { body: { ...data, token: S.route.params.token } });
@@ -490,6 +522,7 @@ document.addEventListener('submit', async (e) => {
     if (errEl) errEl.textContent = err.message;
   } finally {
     btn.disabled = false;
+    btn.classList.remove('busy');
   }
 });
 
@@ -505,36 +538,37 @@ function renderOnboarding() {
   if (step === 0) {
     if (!S.ui.popular) loadPopular();
     const mine = new Set(S.state.venues.map((v) => v.id));
-    const list = S.ui.venueResults ?? S.ui.popular ?? [];
+    const loading = S.ui.venueResults === 'loading' || (!S.ui.venueResults && !S.ui.popular?.length && S.ui.popularLoading);
+    const list = Array.isArray(S.ui.venueResults) ? S.ui.venueResults : S.ui.popular ?? [];
     const extra = S.state.venues.filter((v) => !list.some((p) => p.id === v.id));
     body = `
-      <div class="stack" style="gap:8px;margin:18px 0 16px"><h1>Where do you go to shows?</h1>
+      <div class="stack" style="gap:8px;margin:16px 0 16px"><h1>Where do you go to shows?</h1>
       <p class="muted">Pick your venues. New shows there appear quietly in your feed and evening roundup.</p></div>
-      <div class="search" style="margin-bottom:14px">${I.search}<input class="input" data-search="venues" placeholder="Search any venue" value=""></div>
-      ${!S.ui.popular && !S.ui.venueResults ? '<div class="center" style="min-height:160px"><div class="spinner"></div></div>' : ''}
-      <div class="venue-grid">${[...extra, ...list].map((v) => venueTile(v, mine.has(v.id))).join('')}</div>`;
+      <div class="search" style="margin-bottom:16px">${I.search}<input class="input" data-search="venues" placeholder="Search any venue" value=""></div>
+      <div class="venue-grid">${loading ? skeletonTiles(8) : [...extra, ...list].map((v) => venueTile(v, mine.has(v.id))).join('')}</div>
+      ${!loading && Array.isArray(S.ui.venueResults) && !S.ui.venueResults.length ? '<p class="muted small" style="margin-top:12px">No venues match that.</p>' : ''}`;
     foot = `<button class="btn primary big block" data-act="onb-next">${mine.size ? `Continue with ${mine.size} venue${mine.size > 1 ? 's' : ''}` : 'Skip for now'}</button>`;
   } else if (step === 1) {
     if (!S.ui.suggested) loadSuggested();
     const mine = new Set(S.state.artists.map((a) => a.id));
     const results = S.ui.artistResults;
-    const sugg = (S.ui.suggested ?? []).filter((a) => !results);
+    const sugg = results ? [] : S.ui.suggested ?? [];
     body = `
-      <div class="stack" style="gap:8px;margin:18px 0 16px"><h1>Who can't you miss?</h1>
+      <div class="stack" style="gap:8px;margin:16px 0 16px"><h1>Who can't you miss?</h1>
       <p class="muted">Artists you pick get reminders before every sale, anywhere near you.</p></div>
-      <div class="search" style="margin-bottom:14px">${I.search}<input class="input" data-search="artists" placeholder="Search artists"></div>
+      <div class="search" style="margin-bottom:16px">${I.search}<input class="input" data-search="artists" placeholder="Search artists"></div>
       ${(() => {
         const inSugg = new Set((results ? [] : S.ui.suggested ?? []).map((a) => a.id));
         const extra = S.state.artists.filter((a) => !inSugg.has(a.id));
         return extra.length ? `<div class="chips" style="margin-bottom:16px">${extra.map((a) => artistChip(a, true)).join('')}</div>` : '';
       })()}
-      ${results ? `<div class="list">${results.length ? results.map((a) => artistRow(a, mine.has(a.id))).join('') : '<div class="item muted">No artists found</div>'}</div>` : ''}
-      ${!results && sugg.length ? `<div class="section-head" style="margin-top:6px"><h2>Playing your venues soon</h2></div><div class="chips">${sugg.map((a) => artistChip(a, mine.has(a.id))).join('')}</div>` : ''}`;
+      ${results === 'loading' ? skeletonRows(3) : results ? `<div class="list">${results.length ? results.map((a) => artistRow(a, mine.has(a.id))).join('') : '<div class="item muted">No artists found</div>'}</div>` : ''}
+      ${!results && (S.ui.suggestedLoading || sugg.length) ? `<div class="section-head" style="margin-top:8px"><h2>Playing your venues soon</h2></div>${S.ui.suggestedLoading ? skeletonChips(8) : `<div class="chips">${sugg.map((a) => artistChip(a, mine.has(a.id))).join('')}</div>`}` : ''}`;
     foot = `<button class="btn primary big block" data-act="onb-next">${mine.size ? 'Continue' : 'Skip for now'}</button>`;
   } else if (step === 2) {
     const needsInstall = isIOS() && !isStandalone();
     body = `
-      <div class="stack" style="gap:8px;margin:18px 0 18px"><h1>Only pings that matter</h1>
+      <div class="stack" style="gap:8px;margin:16px 0 16px"><h1>Only pings that matter</h1>
       <p class="muted">Presale Radar stays quiet unless it's useful:</p></div>
       <div class="stack" style="gap:16px">
         ${rule(I.zap, 'Right before a sale', '15 minutes before a presale for artists you follow, with the code ready.')}
@@ -559,14 +593,14 @@ function renderOnboarding() {
   } else {
     const cal = S.state.calendar;
     body = `
-      <div class="stack" style="gap:8px;margin:18px 0 18px"><h1>Put sales in your calendar</h1>
+      <div class="stack" style="gap:8px;margin:16px 0 16px"><h1>Put sales in your calendar</h1>
       <p class="muted">Optional. Each sale becomes a calendar event that opens the sale screen, and it disappears when you hide the show or get tickets.</p></div>
       ${cal && cal.status === 'ok'
         ? `<div class="banner">${I.done}<span>Connected to iCloud. ${cal.events} sale${cal.events === 1 ? '' : 's'} added to your Presales calendar.</span></div>`
         : `<div class="card stack" style="gap:12px">
             <div class="row">${I.phone}<div class="grow"><b>iPhone Calendar</b><div class="small muted">Instant updates through iCloud</div></div><span class="pill good">Best</span></div>
             <button class="btn dark block" data-act="sheet" data-kind="icloud">Connect iPhone Calendar</button></div>
-           <div class="card stack" style="gap:10px;margin-top:12px">
+           <div class="card stack" style="gap:12px;margin-top:12px">
             <div class="row">${I.calendar}<div class="grow"><b>Other calendars</b><div class="small muted">Google, Outlook and others. Updates every few hours.</div></div></div>
             <div class="row"><a class="btn soft sm grow" href="${esc(S.state.calendarUrl.replace(/^https?/, 'webcal'))}">Subscribe</a><button class="btn soft sm grow" data-act="copy" data-text="${esc(S.state.calendarUrl)}">${I.copy} Copy link</button></div></div>`}`;
     foot = `<button class="btn primary big block" data-act="onb-finish">Done</button>`;
@@ -597,19 +631,23 @@ function artistRow(a, on) {
 
 async function loadPopular() {
   S.ui.popular = [];
+  S.ui.popularLoading = true;
   try {
     S.ui.popular = (await api('/api/venues/popular')).results;
   } catch (e) {
     toast(e.message);
   }
+  S.ui.popularLoading = false;
   render();
 }
 
 async function loadSuggested() {
   S.ui.suggested = [];
+  S.ui.suggestedLoading = true;
   try {
     S.ui.suggested = (await api('/api/artists/suggested')).results;
   } catch {}
+  S.ui.suggestedLoading = false;
   render();
 }
 
@@ -647,7 +685,7 @@ function viewHome() {
     .join('')}</div>`;
 
   const dayList = selected.length
-    ? `<div class="stack" style="gap:10px">${selected.map(saleCard).join('')}</div>`
+    ? `<div class="stack" style="gap:12px">${selected.map(saleCard).join('')}</div>`
     : `<div class="card row" style="justify-content:space-between"><span class="muted">Nothing on ${fmtDay(selMs).toLowerCase().startsWith('to') ? fmtDay(selMs).toLowerCase() : fmtDay(selMs)}</span>${
         nextDayWith ? `<button class="link-btn" data-act="pick-day" data-k="${nextDayWith}">Next: ${fmtDay(days[keys.indexOf(nextDayWith)])} ${I.chev}</button>` : ''
       }</div>`;
@@ -668,7 +706,7 @@ function viewHome() {
     ${rest.length ? `<div class="section"><div class="section-head"><h2>Coming up</h2>${S.ui.day !== keys[0] ? `<button class="link-btn" data-act="pick-day" data-k="${keys[0]}">Today</button>` : ''}</div>${strip}<div style="margin-top:12px">${dayList}</div></div>` : ''}
     ${later.length ? `<div class="section">${
       S.ui.showLater
-        ? `<div class="section-head"><h2>Later</h2><button class="link-btn" data-act="toggle-later">Hide</button></div><div class="stack" style="gap:10px">${later.map(saleCard).join('')}</div>`
+        ? `<div class="section-head"><h2>Later</h2><button class="link-btn" data-act="toggle-later">Hide</button></div><div class="stack" style="gap:12px">${later.map(saleCard).join('')}</div>`
         : `<button class="btn soft block" data-act="toggle-later">${later.length} more sale${later.length > 1 ? 's' : ''} after ${fmt(days[13], { month: 'short', day: 'numeric' })}</button>`
     }</div>` : ''}
     ${empty}
@@ -703,7 +741,7 @@ function signupSection() {
 function signupBanner(artistId) {
   const n = openSignups(artistId)[0];
   if (!n) return '';
-  return `<div class="banner warn" style="margin-top:14px">${I.flag}<div class="grow"><b>${esc(n.label.replace(/^the /i, ''))}: sign up by ${shortWhen(n.at)}</b>
+  return `<div class="banner warn" style="margin-top:16px">${I.flag}<div class="grow"><b>${esc(n.label.replace(/^the /i, ''))}: sign up by ${shortWhen(n.at)}</b>
     <div class="small muted">No sign-up, no code.</div>
     <div class="row" style="margin-top:8px"><a class="btn sm primary" href="${esc(n.signupUrl ?? n.url)}" target="_blank" rel="noopener">Sign up</a>
     <button class="btn sm ghost" data-act="signup-done" data-artist="${esc(n.artistId)}" data-label="${esc(n.label)}" data-at="${n.at}">I'm signed up</button></div></div></div>`;
@@ -853,7 +891,9 @@ async function renderLink() {
     return;
   }
   if (!S.guest || S.guest.saleId !== saleId) {
-    app.innerHTML = `<div class="center"><div class="spinner"></div></div>`;
+    app.innerHTML = `<div class="screen no-tabs" aria-busy="true"><div class="topbar"><span class="sk sk-line" style="width:120px;height:20px"></span></div>
+      <div class="stack" style="gap:8px;margin:8px 0 16px"><span class="sk sk-line" style="width:96px;height:20px"></span><span class="sk sk-title" style="width:220px"></span><span class="sk sk-line" style="width:60%"></span></div>
+      <div class="sk" style="height:280px"></div></div>`;
     try {
       S.guest = await api(`/api/link/${u}/${encodeURIComponent(saleId)}/${sig}`);
     } catch (e) {
@@ -932,7 +972,7 @@ function resaleCard(s) {
 function triageSection(list) {
   const shown = list.slice(0, 4);
   return `<div class="section"><div class="section-head"><h2>New at your venues</h2><button class="link-btn" data-act="seen-all">Clear</button></div>
-    <p class="tiny faint" style="margin:-4px 4px 10px">Tap the bell for reminders, or ✕ to pass.</p>
+    <p class="tiny faint" style="margin:-4px 4px 12px">Tap the bell for reminders, or ✕ to pass.</p>
     <div class="list triage">${shown
       .map(
         (s) => `<div class="item">
@@ -958,10 +998,10 @@ function saleCard({ show, sale, later = [] }) {
     <div class="card tap" data-act="nav" data-href="#/go/${encodeURIComponent(sale.id)}"><div class="sale">
       <div class="when"><div class="t">${time[0]}</div><div class="ap">${time[1] ?? ''}</div></div>
       <div class="grow"><div class="row between"><span class="pill ${phase === 'open' ? 'good' : ''}">${phase === 'open' ? 'Open now' : sale.kind === 'public' ? 'On-sale' : esc(sale.name)}</span>${show.isNew ? '<span class="pill new">New</span>' : ''}</div>
-        <div class="who ellipsis" style="margin-top:6px">${esc(show.artist)}</div>
+        <div class="who ellipsis" style="margin-top:8px">${esc(show.artist)}</div>
         <div class="meta ellipsis">${esc(show.venue ?? '')} · ${fmtLocalDate(show.date)}</div>
         ${accessLine(sale, { compact: true })}
-        ${later.length ? `<div class="tiny faint" style="margin-top:6px">Then ${later.slice(0, 2).map((l) => `${l.kind === 'public' ? 'on-sale' : esc(l.name)} ${fmtDay(l.startUtc).toLowerCase().startsWith('to') ? fmtDay(l.startUtc).toLowerCase() : fmtDay(l.startUtc)}`).join(', ')}</div>` : ''}</div>
+        ${later.length ? `<div class="tiny faint" style="margin-top:8px">Then ${later.slice(0, 2).map((l) => `${l.kind === 'public' ? 'on-sale' : esc(l.name)} ${fmtDay(l.startUtc).toLowerCase().startsWith('to') ? fmtDay(l.startUtc).toLowerCase() : fmtDay(l.startUtc)}`).join(', ')}</div>` : ''}</div>
     </div></div></div>`;
 }
 
@@ -1071,7 +1111,7 @@ function showRow(s) {
         : `<span class="chev">${I.chev}</span>`;
   return `<div class="item tap" data-act="nav" data-href="#/show/${encodeURIComponent(s.id)}">
     <div class="date-block">${s.date ? `<div class="m">${fmtLocalDate(s.date, { weekday: 'short' })}</div><div class="d">${fmtLocalDate(s.date, { day: 'numeric' })}</div>` : '<div class="m">TBA</div>'}</div>
-    <div class="grow"><div class="row" style="gap:6px"><b class="ellipsis">${esc(s.artist)}</b>${badge}</div><div class="small muted ellipsis">${esc(s.venue ?? '')}${s.source === 'seatgeek' ? ' · via SeatGeek' : s.source === 'web' ? ` · venue site${nextSaleText(s)}` : nextSaleText(s)}${s.resale?.watching && s.resale.low != null ? ` · resale $${Math.round(s.resale.low)}` : ''}</div></div>
+    <div class="grow"><div class="row" style="gap:8px"><b class="ellipsis">${esc(s.artist)}</b>${badge}</div><div class="small muted ellipsis">${esc(s.venue ?? '')}${s.source === 'seatgeek' ? ' · via SeatGeek' : s.source === 'web' ? ` · venue site${nextSaleText(s)}` : nextSaleText(s)}${s.resale?.watching && s.resale.low != null ? ` · resale $${Math.round(s.resale.low)}` : ''}</div></div>
     ${right}</div>`;
 }
 
@@ -1107,10 +1147,10 @@ function viewShow(id) {
     ${backBar(s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" aria-label="Open on Ticketmaster">${I.external}</a>` : '')}
     <div class="show-head">
       ${s.image ? `<img class="art" src="${esc(s.image)}" alt="" loading="lazy">` : ''}
-      <div class="row wrap" style="gap:6px;margin-bottom:6px">${statusPill}${s.gotTickets ? '<span class="pill good">Got tickets</span>' : ''}</div>
+      <div class="row wrap" style="gap:8px;margin-bottom:8px">${statusPill}${s.gotTickets ? '<span class="pill good">Got tickets</span>' : ''}</div>
       <h1>${esc(s.artist)}</h1>
       ${s.name !== s.artist ? `<div class="muted">${esc(s.name)}</div>` : ''}
-      <div class="muted" style="margin-top:6px">${esc(s.venue ?? '')} · ${fmtLocalDate(s.date, { weekday: 'long', month: 'long', day: 'numeric' })}${s.startUtc ? `, ${fmtTime(s.startUtc)}` : ''}${price ? ` · ${price}` : ''}</div>
+      <div class="muted" style="margin-top:8px">${esc(s.venue ?? '')} · ${fmtLocalDate(s.date, { weekday: 'long', month: 'long', day: 'numeric' })}${s.startUtc ? `, ${fmtTime(s.startUtc)}` : ''}${price ? ` · ${price}` : ''}</div>
       <p class="small faint" style="margin-top:8px">${reasonText}</p>
     </div>
     <div class="action-row">
@@ -1122,14 +1162,14 @@ function viewShow(id) {
       ${s.artistId ? `<button class="action" data-act="mute" data-id="${esc(s.artistId)}" data-name="${esc(s.artist)}">${I.mute}Mute artist</button>` : '<span></span>'}
     </div>
     ${s.availability === 'TICKETS_NOT_AVAILABLE' && !s.gotTickets && S.state.features.soldOutWatch
-      ? `<div class="card row" style="margin-top:14px">${I.radar}<div class="grow"><b>Sold-out watch</b><div class="small muted">Urgent ping if seats are released</div></div><input type="checkbox" class="switch" data-act="watch" data-id="${esc(s.id)}" ${s.watchSoldout ? 'checked' : ''}></div>` : ''}
+      ? `<div class="card row" style="margin-top:16px">${I.radar}<div class="grow"><b>Sold-out watch</b><div class="small muted">Urgent ping if seats are released</div></div><input type="checkbox" class="switch" data-act="watch" data-id="${esc(s.id)}" ${s.watchSoldout ? 'checked' : ''}></div>` : ''}
     ${s.artistId ? signupBanner(s.artistId) : ''}
     ${resaleCard(s)}
     ${s.source === 'seatgeek' || s.source === 'web'
       ? `<div class="section"><div class="banner">${I.info}<span>${s.source === 'web' ? "Found on the venue's website, not Ticketmaster." : 'Not sold on Ticketmaster. Found through SeatGeek.'} ${s.sales.length ? '' : 'There are no presale times, so check the venue for tickets.'}</span></div></div>`
       : `<div class="section"><div class="section-head"><h2>Sales</h2></div>
       <div class="card">${sales.length ? sales.map((x) => saleBlock(s, x)).join('') : '<p class="muted">No upcoming sales. Tickets may already be on sale.</p>'}</div>
-      ${past.length ? `<p class="faint small" style="margin:10px 4px">Ended: ${past.map((p) => esc(p.name)).join(', ')}</p>` : ''}
+      ${past.length ? `<p class="faint small" style="margin:12px 4px">Ended: ${past.map((p) => esc(p.name)).join(', ')}</p>` : ''}
     </div>`}
     ${s.url ? `<div class="section"><a class="btn dark big block" href="${esc(s.url)}" target="_blank" rel="noopener">${s.source === 'ticketmaster' ? 'Open on Ticketmaster' : s.source === 'web' ? 'Open venue page' : 'Open on SeatGeek'} ${I.external}</a></div>` : ''}
   </div>`;
@@ -1145,7 +1185,7 @@ function saleBlock(show, sale) {
   return `<div class="sale-block">
     <div class="row between"><b>${esc(sale.name)}</b><span class="small ${phase === 'open' ? '' : 'muted'}" style="${phase === 'open' ? 'color:var(--good);font-weight:600' : ''}">${when}</span></div>
     ${accessLine(sale)}
-    ${sale.startUtc && show.level === 'remind' && !show.gotTickets ? `<button class="btn sm soft" style="margin-top:10px" data-act="nav" data-href="#/go/${encodeURIComponent(sale.id)}">Open sale screen ${I.chev}</button>` : ''}
+    ${sale.startUtc && show.level === 'remind' && !show.gotTickets ? `<button class="btn sm soft" style="margin-top:12px" data-act="nav" data-href="#/go/${encodeURIComponent(sale.id)}">Open sale screen ${I.chev}</button>` : ''}
   </div>`;
 }
 
@@ -1170,7 +1210,7 @@ function viewGo(saleId) {
       ? `<div class="status-line" style="font-size:18px"><span class="live-dot"></span>&nbsp; It's open. Go!</div>`
       : phase === 'over'
         ? `<div class="status-line muted">This sale has ended</div>`
-        : `<div class="countdown" data-countdown="${sale.startUtc}">${countdownParts(sale.startUtc)}</div><div class="muted small" style="margin-top:6px">${fmtDay(sale.startUtc)} at ${fmtTime(sale.startUtc)}</div>`;
+        : `<div class="countdown" data-countdown="${sale.startUtc}">${countdownParts(sale.startUtc)}</div><div class="muted small" style="margin-top:8px">${fmtDay(sale.startUtc)} at ${fmtTime(sale.startUtc)}</div>`;
 
   const cta =
     phase === 'over'
@@ -1192,13 +1232,13 @@ function viewGo(saleId) {
     : backBar(`<button class="btn sm soft" data-act="nav" data-href="#/show/${encodeURIComponent(show.id)}">Show details</button>`);
   return `<div class="screen no-tabs">
     ${top}
-    <div class="stack" style="gap:4px;margin:6px 0 18px">
+    <div class="stack" style="gap:4px;margin:8px 0 16px">
       <span class="pill accent" style="align-self:flex-start">${sale.kind === 'public' ? 'Public on-sale' : esc(sale.name)}</span>
-      <h1 style="margin-top:6px">${esc(show.artist)}</h1>
+      <h1 style="margin-top:8px">${esc(show.artist)}</h1>
       <div class="muted">${esc(show.venue ?? '')} · ${fmtLocalDate(show.date)}</div>
     </div>
     ${S.state && show.artistId && phase === 'prep' ? signupBanner(show.artistId) : ''}
-    <div class="card stack" style="gap:16px;padding:20px${S.state && show.artistId && phase === 'prep' && openSignups(show.artistId).length ? ';margin-top:14px' : ''}">
+    <div class="card stack" style="gap:16px;padding:20px${S.state && show.artistId && phase === 'prep' && openSignups(show.artistId).length ? ';margin-top:16px' : ''}">
       <div>${headline}</div>
       ${phase === 'over' && !codes.length ? '' : codeSection(sale, codes)}
       ${cta}
@@ -1258,7 +1298,7 @@ function codeSection(sale, codes) {
       register: 'Registration required. If you signed up, your code or link comes by email or text.',
       code: "No code found yet. We're searching and will ping you if one turns up.",
     }[sale.requirement] ?? 'Check your email for a code, or head in and see.';
-    return `<div class="stack" style="gap:10px"><div class="row small muted" style="gap:8px">${I.key}<span>${msg}</span></div>
+    return `<div class="stack" style="gap:12px"><div class="row small muted" style="gap:8px">${I.key}<span>${msg}</span></div>
       ${guest ? '' : editing ? form : `<button class="link-btn" style="align-self:flex-start" data-act="code-edit" data-sale="${esc(sale.id)}">${I.plus} Add a code</button>`}</div>`;
   }
   const best = codes[0];
@@ -1269,10 +1309,10 @@ function codeSection(sale, codes) {
     livenation: 'Official Live Nation password',
     web: `Found online · ${best.confidence} confidence${best.domains?.length > 1 ? ` · ${best.domains.length} sites` : ''}`,
   }[best.source];
-  return `<div class="stack" style="gap:10px">
+  return `<div class="stack" style="gap:12px">
     <div class="code-box"><div class="grow"><div class="tiny faint" style="margin-bottom:2px">${esc(src)}</div><div class="code-text">${esc(best.code)}</div></div>
       <button class="icon-btn" style="background:var(--card)" data-act="copy" data-text="${esc(best.code)}" aria-label="Copy code">${I.copy}</button></div>
-    ${codes.length > 1 ? `<div class="stack" style="gap:6px"><div class="tiny faint">Backups, tap to copy</div><div class="alt-codes">${codes.slice(1).map((c) => `<button class="alt-code" data-act="copy" data-text="${esc(c.code)}">${esc(c.code)} ${I.copy}</button>`).join('')}</div></div>` : ''}
+    ${codes.length > 1 ? `<div class="stack" style="gap:8px"><div class="tiny faint">Backups, tap to copy</div><div class="alt-codes">${codes.slice(1).map((c) => `<button class="alt-code" data-act="copy" data-text="${esc(c.code)}">${esc(c.code)} ${I.copy}</button>`).join('')}</div></div>` : ''}
     <div class="row between wrap">
       ${best.scope && !guest ? `<div class="row small muted" style="gap:8px">Worked? <span class="votes">
         <button class="vote up ${best.myVote === 1 ? 'on' : ''}" data-act="vote" data-v="1" data-scope="${esc(best.scope)}" data-key="${esc(best.key)}" data-code="${esc(best.code)}">${I.thumbUp}</button>
@@ -1280,7 +1320,7 @@ function codeSection(sale, codes) {
       ${editing || guest ? '' : `<button class="link-btn" data-act="code-edit" data-sale="${esc(sale.id)}">${best.source === 'you' ? 'Change code' : 'Use a different code'}</button>`}
     </div>
     ${editing ? form : ''}
-    ${best.source === 'web' && best.snippet ? `<details class="small faint"><summary>Where it was found</summary><p style="margin-top:6px">“${esc(best.snippet)}”</p>${best.sourceUrl ? `<a href="${esc(best.sourceUrl)}" target="_blank" rel="noopener">${esc(new URL(best.sourceUrl).hostname)}</a>` : ''}</details>` : ''}
+    ${best.source === 'web' && best.snippet ? `<details class="small faint"><summary>Where it was found</summary><p style="margin-top:8px">“${esc(best.snippet)}”</p>${best.sourceUrl ? `<a href="${esc(best.sourceUrl)}" target="_blank" rel="noopener">${esc(new URL(best.sourceUrl).hostname)}</a>` : ''}</details>` : ''}
   </div>`;
 }
 
@@ -1338,12 +1378,12 @@ function viewActivity() {
       list.length
         ? [...groups.entries()]
             .map(
-              ([k, items]) => `<div class="section" style="margin-top:14px"><div class="section-head"><h2>${esc(k)}</h2></div><div class="list">${items
+              ([k, items]) => `<div class="section" style="margin-top:16px"><div class="section-head"><h2>${esc(k)}</h2></div><div class="list">${items
                 .map(
                   (a) => `<div class="act ${a.read ? '' : 'unread'}" data-act="nav" data-href="${esc(a.url ?? '#/')}">
                 <div class="ic">${ACT_ICON[a.type] ?? I.bell}</div>
                 <div class="grow"><div class="t">${esc(a.title)}</div>${a.body ? `<div class="small muted" style="white-space:pre-line">${esc(a.body)}</div>` : ''}
-                <div class="tiny faint" style="margin-top:3px">${fmtTime(a.ts)}${a.pushedAt ? ' · notified' : a.priority === 'digest' ? ' · in roundup' : ''}</div></div></div>`,
+                <div class="tiny faint" style="margin-top:4px">${fmtTime(a.ts)}${a.pushedAt ? ' · notified' : a.priority === 'digest' ? ' · in roundup' : ''}</div></div></div>`,
                 )
                 .join('')}</div></div>`,
             )
@@ -1383,15 +1423,15 @@ function viewSettings() {
     <div class="section"><div class="section-head"><h2>Notifications</h2></div><div class="list">
       <div class="item">${I.phone}<div class="grow">Push on this device<div class="small muted" id="push-status">${f.pushDevices ? `${f.pushDevices} device${f.pushDevices > 1 ? 's' : ''} on` : 'Off'}</div></div>
         ${f.push && pushSupported() && !(isIOS() && !isStandalone()) ? `<button class="btn sm ${f.pushDevices ? 'soft' : 'primary'}" data-act="${f.pushDevices ? 'test-push' : 'enable-push'}">${f.pushDevices ? 'Test' : 'Turn on'}</button>` : '<span class="small faint">Add to Home Screen</span>'}</div>
-      <div class="item" style="flex-direction:column;align-items:stretch;gap:10px"><div><b style="font-weight:500">Remind me before a sale</b><div class="small muted">Urgent pings, for artists you follow and shows you starred</div></div><div class="chips">${[60, 30, 15, 5].map(reminderChip).join('')}</div></div>
+      <div class="item" style="flex-direction:column;align-items:stretch;gap:12px"><div><b style="font-weight:500">Remind me before a sale</b><div class="small muted">Urgent pings, for artists you follow and shows you starred</div></div><div class="chips">${[60, 30, 15, 5].map(reminderChip).join('')}</div></div>
       <div class="item"><div class="grow">Also when a sale opens</div><input type="checkbox" class="switch" data-act="pref-bool" data-k="openPush" ${p.openPush ? 'checked' : ''}></div>
-      <div class="item"><div class="grow">Evening roundup</div><select class="input" style="width:auto;min-height:38px;padding:6px 10px" data-act="pref-num" data-k="digestHour">${hourOpts(p.digestHour)}</select></div>
-      <div class="item"><div class="grow">Quiet from</div><select class="input" style="width:auto;min-height:38px;padding:6px 10px" data-act="pref-num" data-k="quietStart">${hourOpts(p.quietStart)}</select><span class="muted small">to</span><select class="input" style="width:auto;min-height:38px;padding:6px 10px" data-act="pref-num" data-k="quietEnd">${hourOpts(p.quietEnd)}</select></div>
+      <div class="item"><div class="grow">Evening roundup</div><select class="input" style="width:auto;min-height:38px;padding:8px 12px" data-act="pref-num" data-k="digestHour">${hourOpts(p.digestHour)}</select></div>
+      <div class="item"><div class="grow">Quiet from</div><select class="input" style="width:auto;min-height:38px;padding:8px 12px" data-act="pref-num" data-k="quietStart">${hourOpts(p.quietStart)}</select><span class="muted small">to</span><select class="input" style="width:auto;min-height:38px;padding:8px 12px" data-act="pref-num" data-k="quietEnd">${hourOpts(p.quietEnd)}</select></div>
       <div class="item tap" data-act="digest-preview"><div class="grow">Send me tonight's roundup now</div><span class="chev">${I.chev}</span></div>
     </div><p class="tiny faint" style="margin:8px 4px">Urgent pings (sale starting, seats released) still come in quiet hours. Everything else waits.</p></div>
 
     <div class="section"><div class="section-head"><h2>Calendar</h2>${st.calendar?.lastSync ? `<span class="tiny faint">Synced ${ago(st.calendar.lastSync)}</span>` : ''}</div>
-      ${st.calendar?.status === 'error' ? `<div class="banner warn" style="margin-bottom:10px">${I.alert}<span>${esc(st.calendar.lastError ?? 'Calendar sync failed.')}</span></div>` : ''}
+      ${st.calendar?.status === 'error' ? `<div class="banner warn" style="margin-bottom:12px">${I.alert}<span>${esc(st.calendar.lastError ?? 'Calendar sync failed.')}</span></div>` : ''}
       <div class="list">
       ${st.calendar
         ? `<div class="item">${I.phone}<div class="grow">iCloud<div class="small muted">${esc(st.calendar.username)} · ${st.calendar.events} sale${st.calendar.events === 1 ? '' : 's'} in "Presales"</div></div><button class="btn sm soft" data-act="cal-sync">Sync</button></div>
@@ -1436,7 +1476,7 @@ function viewSettings() {
     <div class="section"><div class="section-head"><h2>Status</h2>${sync?.lastEnd ? `<span class="tiny faint">Synced ${ago(sync.lastEnd)}</span>` : ''}</div>
       ${issues.length ? `<div class="stack" style="gap:8px">${issues.map((i) => `<div class="banner warn">${I.alert}<span>${i}</span></div>`).join('')}</div>` : `<div class="banner">${I.done}<span>Everything is connected.</span></div>`}
       ${st.venues.concat(st.artists).some((x) => x.lastError) ? `<p class="small" style="color:var(--bad);margin:8px 4px">Some sources failed on their last sync. They retry automatically.</p>` : ''}
-      <div class="list" style="margin-top:10px">
+      <div class="list" style="margin-top:12px">
         ${[['ticketmaster', 'Ticketmaster', 4500], ['seatgeek', 'SeatGeek', 5000], ['brave', 'Web searches', 30], ['web', 'Web pages', 3000]]
           .filter(([k]) => k !== 'seatgeek' || f.seatgeek)
           .map(([k, label, limit]) => {
@@ -1446,7 +1486,7 @@ function viewSettings() {
           .join('')}
       </div>
       <p class="tiny faint" style="margin:8px 4px">Checks run more often near sales and on weekday mornings, when tours are announced, and less often for quiet venues. Each sale you care about is re-checked 45 and 10 minutes before it starts.</p>
-      <button class="btn block soft" style="margin-top:10px" data-act="refresh-now">${I.refresh} Check for new shows now</button>
+      <button class="btn block soft" style="margin-top:12px" data-act="refresh-now">${I.refresh} Check for new shows now</button>
     </div>
 
 ` : ''}
@@ -1480,37 +1520,37 @@ function sheetHtml() {
   let body = '';
   if (sh.kind === 'venues') {
     const mine = new Set(st.venues.map((v) => v.id));
-    body = `<h2>Venues</h2><p class="small muted" style="margin:4px 0 14px">Shows here appear in your feed and roundup. Turn on "Every show" to get reminders for all of them.</p>
+    body = `<h2>Venues</h2><p class="small muted" style="margin:4px 0 16px">Shows here appear in your feed and roundup. Turn on "Every show" to get reminders for all of them.</p>
       <div class="search" style="margin-bottom:12px">${I.search}<input class="input" data-search="sheet-venues" placeholder="Add a venue"></div>
-      ${S.ui.sheetResults ? `<div class="list" style="margin-bottom:16px">${S.ui.sheetResults.length ? S.ui.sheetResults.map((v) => `<div class="item"><div class="grow"><b style="font-weight:600">${esc(v.name)}</b><div class="small muted">${esc(v.city ?? '')}</div></div><button class="btn sm ${mine.has(v.id) ? 'soft' : 'primary'}" data-act="toggle-venue" data-id="${esc(v.id)}" data-name="${esc(v.name)}" data-city="${esc(v.city ?? '')}">${mine.has(v.id) ? 'Added' : 'Add'}</button></div>`).join('') : '<div class="item muted">No venues found</div>'}</div>` : ''}
+      ${S.ui.sheetResults === 'loading' ? `<div style="margin-bottom:16px">${skeletonRows(3)}</div>` : S.ui.sheetResults ? `<div class="list" style="margin-bottom:16px">${S.ui.sheetResults.length ? S.ui.sheetResults.map((v) => `<div class="item"><div class="grow"><b style="font-weight:600">${esc(v.name)}</b><div class="small muted">${esc(v.city ?? '')}</div></div><button class="btn sm ${mine.has(v.id) ? 'soft' : 'primary'}" data-act="toggle-venue" data-id="${esc(v.id)}" data-name="${esc(v.name)}" data-city="${esc(v.city ?? '')}">${mine.has(v.id) ? 'Added' : 'Add'}</button></div>`).join('') : '<div class="item muted">No venues found</div>'}</div>` : ''}
       <div class="list">${st.venues.length ? st.venues.map((v) => `<div class="item"><div class="grow"><b style="font-weight:600">${esc(v.name)}</b><div class="tiny ${v.lastError ? '' : 'faint'}" style="${v.lastError ? 'color:var(--bad)' : ''}">${v.lastError ? 'Sync failed, retrying' : `Synced ${ago(v.lastSynced)}`}</div></div>
         <span class="tiny muted">Every show</span><input type="checkbox" class="switch" data-act="venue-all" data-id="${esc(v.id)}" ${v.remindAll ? 'checked' : ''}>
         <button class="icon-btn plain" data-act="toggle-venue" data-id="${esc(v.id)}" data-name="${esc(v.name)}" aria-label="Remove">${I.trash}</button></div>`).join('') : '<div class="item muted">No venues yet</div>'}</div>`;
   } else if (sh.kind === 'artists') {
     const mine = new Set(st.artists.map((a) => a.id));
-    body = `<h2>Artists</h2><p class="small muted" style="margin:4px 0 14px">You get reminders for every sale by these artists near you.</p>
+    body = `<h2>Artists</h2><p class="small muted" style="margin:4px 0 16px">You get reminders for every sale by these artists near you.</p>
       <div class="search" style="margin-bottom:12px">${I.search}<input class="input" data-search="sheet-artists" placeholder="Add an artist"></div>
-      ${S.ui.sheetResults ? `<div class="list" style="margin-bottom:16px">${S.ui.sheetResults.length ? S.ui.sheetResults.map((a) => artistRow(a, mine.has(a.id))).join('') : '<div class="item muted">No artists found</div>'}</div>` : ''}
+      ${S.ui.sheetResults === 'loading' ? `<div style="margin-bottom:16px">${skeletonRows(3)}</div>` : S.ui.sheetResults ? `<div class="list" style="margin-bottom:16px">${S.ui.sheetResults.length ? S.ui.sheetResults.map((a) => artistRow(a, mine.has(a.id))).join('') : '<div class="item muted">No artists found</div>'}</div>` : ''}
       <div class="list">${st.artists.length ? st.artists.map((a) => `<div class="item"><div class="grow"><b style="font-weight:600">${esc(a.name)}</b></div><button class="icon-btn plain" data-act="toggle-artist" data-id="${esc(a.id)}" data-name="${esc(a.name)}" aria-label="Unfollow">${I.trash}</button></div>`).join('') : '<div class="item muted">No artists yet</div>'}</div>`;
   } else if (sh.kind === 'hidden') {
     body = `<h2>Muted and hidden</h2>
       <div class="section-head" style="margin-top:16px"><h2>Muted artists</h2></div>
       <div class="list">${st.muted.length ? st.muted.map((a) => `<div class="item"><div class="grow">${esc(a.name)}</div><button class="btn sm soft" data-act="unmute" data-id="${esc(a.id)}">Unmute</button></div>`).join('') : '<div class="item muted small">None</div>'}</div>
-      <div class="section-head" style="margin-top:18px"><h2>Hidden shows</h2></div>
+      <div class="section-head" style="margin-top:16px"><h2>Hidden shows</h2></div>
       <div class="list">${st.hidden.filter((h) => h.reason === 'hidden').length ? st.hidden.filter((h) => h.reason === 'hidden').map((s) => `<div class="item"><div class="grow"><b style="font-weight:600">${esc(s.artist)}</b><div class="small muted">${esc(s.venue ?? '')} · ${fmtLocalDate(s.date)}</div></div><button class="btn sm soft" data-act="unhide-show" data-id="${esc(s.id)}">Unhide</button></div>`).join('') : '<div class="item muted small">None</div>'}</div>`;
   } else if (sh.kind === 'add-source') {
-    body = `<h2>Add a page to scan</h2><p class="small muted" style="margin:4px 0 14px">Any public page where people post presale codes, like a forum thread or a code roundup. It's checked every few hours, and more often before a presale.</p>
+    body = `<h2>Add a page to scan</h2><p class="small muted" style="margin:4px 0 16px">Any public page where people post presale codes, like a forum thread or a code roundup. It's checked every few hours, and more often before a presale.</p>
       <form class="stack" data-form="source"><div class="field"><label>Web address</label><input class="input" name="url" type="url" inputmode="url" placeholder="https://" required></div>
       <div class="field"><label>Name (optional)</label><input class="input" name="label" placeholder="Fan forum"></div><div class="error"></div>
       <button class="btn primary block" type="submit">Add page</button></form>`;
   } else if (sh.kind === 'add-venue-page') {
-    body = `<h2>Add a venue's events page</h2><p class="small muted" style="margin:4px 0 14px">Paste the page on the venue's site that lists upcoming shows. Most sites include machine-readable listings. An .ics calendar link works too.</p>
+    body = `<h2>Add a venue's events page</h2><p class="small muted" style="margin:4px 0 16px">Paste the page on the venue's site that lists upcoming shows. Most sites include machine-readable listings. An .ics calendar link works too.</p>
       <form class="stack" data-form="venue-page" novalidate>
         <div class="field"><label>Events page</label><input class="input" name="url" type="url" inputmode="url" placeholder="https://venue.com/events" required></div>
         <div class="field"><label>Which venue is it?</label><select class="input" name="venueId"><option value="">Not one of my venues</option>${st.venues.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('')}</select></div>
         <div class="error"></div><button class="btn primary block" type="submit">Add and check now</button></form>`;
   } else if (sh.kind === 'icloud') {
-    body = `<h2>Connect iPhone Calendar</h2><p class="small muted" style="margin:4px 0 14px">Presale Radar adds a "Presales" calendar to your iCloud and keeps it up to date. Apple needs an app-specific password, which only works for calendars and can be revoked any time.</p>
+    body = `<h2>Connect iPhone Calendar</h2><p class="small muted" style="margin:4px 0 16px">Presale Radar adds a "Presales" calendar to your iCloud and keeps it up to date. Apple needs an app-specific password, which only works for calendars and can be revoked any time.</p>
       <div class="ios-steps small" style="margin-bottom:16px">
         <div>Open <a href="https://account.apple.com/account/manage" target="_blank" rel="noopener">account.apple.com</a> and sign in</div>
         <div>Go to Sign-In and Security, then App-Specific Passwords</div>
@@ -1525,11 +1565,11 @@ function sheetHtml() {
       <div class="stack"><button class="btn block danger" data-act="cal-disconnect" data-remove="1">Disconnect and delete the Presales calendar</button>
       <button class="btn block" data-act="cal-disconnect" data-remove="0">Disconnect, keep the events</button></div>`;
   } else if (sh.kind === 'saved-codes') {
-    body = `<h2>Your saved codes</h2><p class="small muted" style="margin:4px 0 14px">Used automatically for that artist's other dates.</p>
+    body = `<h2>Your saved codes</h2><p class="small muted" style="margin:4px 0 16px">Used automatically for that artist's other dates.</p>
       <div class="list">${st.artistCodes.map((c) => `<div class="item"><div class="grow"><b style="font-weight:600">${esc(c.artist ?? c.artistId)}</b><div class="small muted">${esc(c.saleSlug.replace(/-/g, ' '))}</div></div><span class="mono"><b>${esc(c.code)}</b></span></div>`).join('')}</div>`;
   }
   return `<div class="sheet-back" data-act="sheet-close-bg"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${body}
-    <button class="btn ghost block" style="margin-top:14px" data-act="sheet-close">Done</button></div></div>`;
+    <button class="btn ghost block" style="margin-top:16px" data-act="sheet-close">Done</button></div></div>`;
 }
 
 // ============================================================ actions
@@ -1616,7 +1656,7 @@ const handlers = {
   'toggle-venue': (el) => {
     const on = S.state.venues.some((v) => v.id === el.dataset.id);
     el.classList.toggle('on', !on);
-    mutate(() =>
+    return mutate(() =>
       on
         ? api(`/api/venues/${encodeURIComponent(el.dataset.id)}`, { method: 'DELETE' })
         : api('/api/venues', { body: { id: el.dataset.id, name: el.dataset.name, city: el.dataset.city || null } }),
@@ -1626,7 +1666,7 @@ const handlers = {
   'toggle-artist': (el) => {
     const on = S.state.artists.some((a) => a.id === el.dataset.id);
     el.classList.toggle('on', !on);
-    mutate(() =>
+    return mutate(() =>
       on
         ? api(`/api/artists/${encodeURIComponent(el.dataset.id)}`, { method: 'DELETE' })
         : api('/api/artists', { body: { id: el.dataset.id, name: el.dataset.name, image: el.dataset.image || null } }),
@@ -1642,7 +1682,7 @@ const handlers = {
   // shows
   star: (el) => {
     const s = findShow(el.dataset.id);
-    mutate(() => api(`/api/shows/${encodeURIComponent(el.dataset.id)}`, { body: { state: 'tracked', seen: true } }), {
+    return mutate(() => api(`/api/shows/${encodeURIComponent(el.dataset.id)}`, { body: { state: 'tracked', seen: true } }), {
       msg: `Reminders on for ${s?.artist ?? 'this show'}`,
       undo: () => mutate(() => api(`/api/shows/${encodeURIComponent(el.dataset.id)}`, { body: { state: 'auto' } })),
     });
@@ -1653,7 +1693,7 @@ const handlers = {
   got: (el) => {
     const s = findShow(el.dataset.id);
     const next = !s?.gotTickets;
-    mutate(() => api(`/api/shows/${encodeURIComponent(el.dataset.id)}`, { body: { gotTickets: next } }), {
+    return mutate(() => api(`/api/shows/${encodeURIComponent(el.dataset.id)}`, { body: { gotTickets: next } }), {
       msg: next ? 'Enjoy the show! Reminders stopped.' : 'Unmarked',
     });
   },
@@ -1815,7 +1855,15 @@ document.addEventListener('click', (e) => {
   if (!fn) return;
   if (el.tagName === 'A' && el.getAttribute('href')?.startsWith('#') === false) return;
   e.preventDefault();
-  fn(el, e);
+  const r = fn(el, e);
+  if (r && typeof r.then === 'function') {
+    el.classList.add('busy');
+    el.setAttribute('aria-busy', 'true');
+    r.finally(() => {
+      el.classList.remove('busy');
+      el.removeAttribute('aria-busy');
+    });
+  }
 });
 
 document.addEventListener('change', (e) => {
@@ -1856,6 +1904,15 @@ document.addEventListener('input', (e) => {
     if (q.trim().length < 2) {
       S.ui[key] = null;
     } else {
+      S.ui[key] = 'loading';
+      const val = el.value;
+      render();
+      const box = document.querySelector(`[data-search="${kind}"]`);
+      if (box) {
+        box.value = val;
+        box.focus();
+        box.setSelectionRange(val.length, val.length);
+      }
       try {
         S.ui[key] = (await api(`/api/search/${isVenue ? 'venues' : 'artists'}?q=${encodeURIComponent(q.trim())}`)).results;
       } catch (err) {

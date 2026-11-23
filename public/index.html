@@ -17,7 +17,12 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div id="app" aria-live="polite"></div>
+  <div id="app" aria-live="polite"><div class="screen" aria-busy="true"><span class="sr-only">Loading</span>
+    <div class="topbar"><span class="sk sk-title"></span></div>
+    <div class="sk" style="height:236px"></div>
+    <div class="section"><div class="section-head"><span class="sk sk-line" style="width:96px"></span></div>
+      <div class="stack" style="gap:12px"><div class="sk" style="height:96px"></div><div class="sk" style="height:96px"></div><div class="sk" style="height:96px"></div></div></div>
+  </div></div>
   <div id="toast" role="status" aria-live="polite"></div>
   <noscript>Presale Radar needs JavaScript.</noscript>
   <script type="module" src="/app.js"></script>
