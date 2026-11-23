@@ -6,6 +6,7 @@ import { startScheduler } from './jobs.js';
 import { getSetting, setSetting } from './db.js';
 import { randomToken } from './util.js';
 import type { Ctx } from './types.js';
+import { purgeDemoData } from './purge.js';
 
 async function main() {
   const cfg = loadConfig();
@@ -26,6 +27,11 @@ async function main() {
       ctx.secret = randomToken(32);
       await setSetting(ctx, 'app_secret', ctx.secret);
     }
+  }
+
+  if (!cfg.demo) {
+    const n = await purgeDemoData(ctx);
+    if (n) console.log(`[boot] removed ${n} demo shows; real data from here on`);
   }
 
   const missing = [
