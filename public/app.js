@@ -1231,7 +1231,7 @@ function viewGo(saleId) {
       ? ''
       : `<button class="btn ${phase === 'prep' ? 'dark' : 'primary'} big block" data-act="buy" data-sale="${esc(sale.id)}">
            ${best ? `${I.copy} Copy code and open Ticketmaster` : `Open Ticketmaster ${I.external}`}</button>
-         <p class="small muted one-line" style="text-align:center">${
+         <p class="small muted" style="text-align:center">${
            phase === 'prep'
              ? 'Waiting room opens 10–30 min before.'
              : phase === 'soon'
@@ -1262,9 +1262,9 @@ function viewGo(saleId) {
       phase === 'over' || phase === 'open'
         ? afterSale(show, nextSale)
         : `           <div class="section"><div class="section-head"><h2>Tips</h2></div><div class="card small muted stack" style="gap:8px">
-             <div class="one-line">• One device, one tab. More can get you flagged.</div>
-             <div class="one-line">• Don't refresh in the queue.</div>
-             <div class="one-line">• Grab good-enough seats fast. Carts expire.</div>
+             <div>• One device, one tab. More can get you flagged.</div>
+             <div>• Don't refresh in the queue.</div>
+             <div>• Grab good-enough seats fast. Carts expire.</div>
            </div></div>`
     }
   </div>`;
