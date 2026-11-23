@@ -7,6 +7,7 @@ export const DAILY_LIMITS = {
   seatgeek: 5000,
   brave: 30, // roughly what Brave's monthly free credit covers
   web: 3000, // venue sites, help articles, code pages
+  social: 1500, // Reddit and Bluesky searches and threads
 } as const;
 export type Provider = keyof typeof DAILY_LIMITS;
 

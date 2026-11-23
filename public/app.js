@@ -1479,7 +1479,7 @@ function viewSettings() {
       ${issues.length ? `<div class="stack" style="gap:8px">${issues.map((i) => `<div class="banner warn">${I.alert}<span>${i}</span></div>`).join('')}</div>` : `<div class="banner">${I.done}<span>Everything is connected.</span></div>`}
       ${st.venues.concat(st.artists).some((x) => x.lastError) ? `<p class="small" style="color:var(--bad);margin:8px 4px">Some sources failed on their last sync. They retry automatically.</p>` : ''}
       <div class="list" style="margin-top:12px">
-        ${[['ticketmaster', 'Ticketmaster', 4500], ['seatgeek', 'SeatGeek', 5000], ['brave', 'Web searches', 30], ['web', 'Web pages', 3000]]
+        ${[['ticketmaster', 'Ticketmaster', 4500], ['seatgeek', 'SeatGeek', 5000], ['brave', 'Web searches', 30], ['web', 'Web pages', 3000], ['social', 'Reddit and Bluesky', 1500]]
           .filter(([k]) => k !== 'seatgeek' || f.seatgeek)
           .map(([k, label, limit]) => {
             const used = st.budgets?.[k] ?? 0;

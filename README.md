@@ -43,6 +43,7 @@ It never buys tickets for you. Joining queues and checking out stay with you, wh
    - `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`: run `npm run vapid` locally and paste both lines.
    - `VAPID_SUBJECT`: `mailto:you@example.com`.
    - `BRAVE_API_KEY` (recommended): from api-dashboard.search.brave.com. The monthly free credit covers this app's roughly 30 searches a day.
+   - `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` (optional): a free "script" app from reddit.com/prefs/apps. Reddit and Bluesky are searched for leaked codes either way, but Reddit often blocks cloud servers that don't sign in.
    - `SEATGEEK_CLIENT_ID` (recommended): from seatgeek.com/account/develop. It turns on resale prices and shows sold outside Ticketmaster.
 5. Under **Settings**, then **Networking**, click **Generate Domain**.
 6. Open the domain on your phone and create your account.

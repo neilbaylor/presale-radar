@@ -5,7 +5,8 @@
  *  1. Ticketmaster's own presale descriptions ("use code XYZ")       -> scope 'sale'
  *  2. Official help pages that publish the Live Nation password        -> scope 'livenation'
  *  3. Web search per upcoming presale (Brave Search API), top pages    -> scope 'artist'
- *  4. Pages you add yourself                                          -> scope 'artist'
+ *  4. Fan posts on Reddit and Bluesky, where leaks show up first       -> scope 'artist'
+ *  5. Pages you add yourself                                          -> scope 'artist'
  *
  * Every candidate gets a 0..1 score from how it was phrased ("code is X"
  * beats "X" somewhere nearby), how many different sites mention it, and
@@ -16,6 +17,7 @@ import { confidenceLabel, getAllFollows, getSetting, interest, now, setSetting, 
 import { demoCodePage, demoSearch } from './demo.js';
 import { enqueue } from './notify.js';
 import { canSpend, spend } from './budget.js';
+import { feedbackAdjust, recencyFactor, searchBluesky, searchReddit, tourWordBoost, type SocialPost } from './social.js';
 
 // ---------------------------------------------------------------- extraction
 
@@ -31,7 +33,8 @@ const STOPWORDS = new Set(
    SOME MORE MOST BEST FREE SEATS SEAT FLOOR GA PIT CAD USD TAX FEES PRICE PRICES COST LIMIT RESALE PLATINUM GENERAL
    ADMISSION PUBLIC EARLY ACCESS REGISTRATION REGISTER UPGRADE MERCH ALBUM RADIO VENUE LOCAL PROMOTER MEMBER MEMBERS
    ACCOUNT CLICK CHECK NOTE IMPORTANT INFO DETAILS READ MENU HOME SEARCH COOKIES PRIVACY TERMS SUBSCRIBE SHARE TWEET
-   ONTARIO TORONTO INSTAGRAM TWITTER FACEBOOK REDDIT TIKTOK YOUTUBE NEWS`
+   ONTARIO TORONTO INSTAGRAM TWITTER FACEBOOK REDDIT TIKTOK YOUTUBE NEWS FWIW IIRC IMHO LMAO LMFAO YALL BLUESKY
+   DELETED REMOVED SUBREDDIT THREAD COMMENT COMMENTS UPVOTE MODS`
     .split(/\s+/)
     .filter(Boolean),
 );
@@ -186,10 +189,12 @@ export function extractArtistCodes(text: string, artists: ArtistRef[]): (Candida
   const lower = text.toLowerCase();
   const mentions: { artistId: string; start: number; end: number }[] = [];
   const fullNames = new Map<string, string>();
+  const nameWords = new Map<string, Set<string>>();
   for (const a of artists) {
     const needle = a.name.toLowerCase().trim();
     if (needle.length < 3) continue;
     fullNames.set(a.id, a.name.toUpperCase().replace(/[^A-Z0-9]/g, ''));
+    nameWords.set(a.id, new Set(a.name.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean)));
     for (let idx = lower.indexOf(needle); idx !== -1; idx = lower.indexOf(needle, idx + needle.length)) {
       // Whole words only: "Lake Effect" shouldn't match "Lake Effects Tour".
       const before = lower[idx - 1];
@@ -219,6 +224,8 @@ export function extractArtistCodes(text: string, artists: ArtistRef[]): (Candida
     }
     if (!best || fullNames.get(best.artistId) === tok.toUpperCase()) continue;
     let strength = occ.strength;
+    // "IMAGINE DRAGONS presale" isn't a code called DRAGONS, but "the code is DRAGONS" might be.
+    if (strength < 0.75 && nameWords.get(best.artistId)?.has(tok.toUpperCase())) continue;
     if (strength < 0.45) {
       const span = text.slice(Math.min(best.start, pos), Math.max(best.start, pos));
       if (!KEYWORD.test(span)) continue;
@@ -281,6 +288,8 @@ interface Found {
   hits: number;
   url: string;
   snippet: string;
+  /** Who said it, when that's more specific than the site (one Reddit user, one Bluesky account). */
+  domain?: string;
 }
 
 /** Merge new evidence into web_codes. Returns codes that are new or just crossed into "medium". */
@@ -288,7 +297,7 @@ async function saveFound(ctx: Ctx, found: Found[]): Promise<{ scope: string; key
   const t = now(ctx);
   const promoted: { scope: string; key: string; code: string; score: number }[] = [];
   for (const f of found) {
-    const domain = domainOf(f.url);
+    const domain = f.domain ?? domainOf(f.url);
     const existing = await ctx.db.one<{ score: number; hits: number; domains: string[]; votes: number }>(
       'SELECT score, hits, domains, votes FROM web_codes WHERE scope = $1 AND key = $2 AND code = $3',
       [f.scope, f.key, f.code],
@@ -366,7 +375,7 @@ export async function webSearch(ctx: Ctx, query: string): Promise<SearchHit[]> {
 }
 
 /** Pages not worth opening: Ticketmaster's own app pages, logins, video. */
-const SKIP_HOSTS = /(^|\.)(ticketmaster\.(ca|com)|livenation\.com|facebook\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|stubhub|vividseats|seatgeek)/i;
+const SKIP_HOSTS = /(^|\.)(reddit\.com|bsky\.app|ticketmaster\.(ca|com)|livenation\.com|facebook\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|stubhub|vividseats|seatgeek)/i;
 
 // ---------------------------------------------------------------- jobs
 
@@ -455,14 +464,49 @@ export async function scanSources(ctx: Ctx, opts: { force?: boolean } = {}): Pro
   return out;
 }
 
-/** 3. Web search for each presale that still needs a code. */
+/** Turn one source's text into scored finds for a search plan. */
+function findsIn(text: string, p: Plan, url: string, domain: string | null, weight: number, replies = ''): Found[] {
+  const out: Found[] = [];
+  if (weight <= 0) return out;
+  const fb = feedbackAdjust(replies);
+  for (const c of extractArtistCodes(text, [{ id: p.artistId, name: p.artist }])) {
+    const strength = Math.max(0, Math.min(0.95, c.strength * weight + fb + tourWordBoost(c.code, p.eventNames, p.artist)));
+    if (strength < 0.2) continue;
+    out.push({ scope: 'artist', key: p.artistId, code: c.code, strength, hits: c.hits, url, snippet: c.snippet, domain: domain ?? undefined });
+  }
+  return out;
+}
+
+interface Plan {
+  artistId: string;
+  artist: string;
+  saleName: string;
+  city: string | null;
+  startUtc: number;
+  saleId: string;
+  eventNames: string[];
+}
+
+async function dueSearch(ctx: Ctx, query: string, everyMin: number): Promise<boolean> {
+  const last = await ctx.db.one<{ ran_at: number }>('SELECT ran_at FROM code_searches WHERE query = $1', [query]);
+  return !last || now(ctx) - last.ran_at >= everyMin * 60_000;
+}
+
+async function recordSearch(ctx: Ctx, query: string, saleId: string, results: number) {
+  await ctx.db.query(
+    `INSERT INTO code_searches (query, sale_id, ran_at, results) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (query) DO UPDATE SET ran_at = $3, results = $4, sale_id = $2`,
+    [query, saleId, now(ctx), results],
+  );
+}
+
+/** 3 + 4. Search the web and fan posts for each presale that still needs a code. */
 export async function searchForCodes(ctx: Ctx): Promise<{ searches: number; promoted: Awaited<ReturnType<typeof saveFound>>; errors: string[] }> {
   const out = { searches: 0, promoted: [] as Awaited<ReturnType<typeof saveFound>>, errors: [] as string[] };
-  if (!ctx.cfg.braveApiKey && !ctx.cfg.demo) return out;
   const t = now(ctx);
 
-  const sales = await ctx.db.query<{ id: string; name: string; start_utc: number; artist_id: string; artist: string; city: string | null }>(
-    `SELECT s.id, s.name, s.start_utc, e.attraction_ids[1] AS artist_id, e.attraction_names[1] AS artist, e.city
+  const sales = await ctx.db.query<{ id: string; name: string; start_utc: number; artist_id: string; artist: string; city: string | null; ename: string }>(
+    `SELECT s.id, s.name, s.start_utc, e.attraction_ids[1] AS artist_id, e.attraction_names[1] AS artist, e.city, e.name AS ename
        FROM sales s JOIN events e ON e.id = s.event_id
       WHERE s.kind = 'presale' AND s.removed = FALSE
         AND s.start_utc > $1 AND s.start_utc < $2
@@ -474,49 +518,70 @@ export async function searchForCodes(ctx: Ctx): Promise<{ searches: number; prom
     [t - 2 * 3_600_000, t + 10 * 86_400_000],
   );
 
-  // One search plan per artist + presale type (tour dates share codes).
-  const plans = new Map<string, { artistId: string; artist: string; saleName: string; city: string | null; startUtc: number; saleId: string }>();
+  // One search plan per artist + presale type (tour dates share codes), soonest first.
+  const plans = new Map<string, Plan>();
   for (const s of sales) {
     const k = `${s.artist_id}|${s.name.toLowerCase()}`;
-    if (!plans.has(k)) plans.set(k, { artistId: s.artist_id, artist: s.artist, saleName: s.name, city: s.city, startUtc: s.start_utc, saleId: s.id });
+    const p = plans.get(k) ?? { artistId: s.artist_id, artist: s.artist, saleName: s.name, city: s.city, startUtc: s.start_utc, saleId: s.id, eventNames: [] };
+    if (!p.eventNames.includes(s.ename)) p.eventNames.push(s.ename);
+    plans.set(k, p);
   }
 
+  // Fan posts: once per artist, most often in the hours before a presale, when leaks appear.
+  const socialDone = new Set<string>();
+  for (const p of plans.values()) {
+    if (socialDone.has(p.artistId)) continue;
+    socialDone.add(p.artistId);
+    const until = p.startUtc - t;
+    const everyMin = until < 3 * 3_600_000 ? 10 : until < 48 * 3_600_000 ? 30 : 6 * 60;
+    for (const [source, run] of [
+      ['reddit', () => searchReddit(ctx, p.artist, until < 48 * 3_600_000 ? 4 : 2)],
+      ['bluesky', () => searchBluesky(ctx, p.artist)],
+    ] as [string, () => Promise<SocialPost[]>][]) {
+      const q = `${source}:${p.artist}`;
+      if (!(await dueSearch(ctx, q, everyMin))) continue;
+      try {
+        const posts = await run();
+        const found = posts.flatMap((post) => findsIn(post.text, p, post.url, post.domain, recencyFactor(post.createdMs, t), post.replies));
+        out.promoted.push(...(await saveFound(ctx, found)));
+        await recordSearch(ctx, q, p.saleId, posts.length);
+        out.searches++;
+      } catch (err: any) {
+        out.errors.push(`${source} "${p.artist}": ${String(err?.message ?? err).slice(0, 120)}`);
+        await recordSearch(ctx, q, p.saleId, 0);
+      }
+    }
+  }
+
+  if (!ctx.cfg.braveApiKey && !ctx.cfg.demo) return out;
   for (const p of plans.values()) {
     const until = p.startUtc - t;
     const everyMin = until < 2 * 3_600_000 ? 10 : until < 48 * 3_600_000 ? 60 : 12 * 60;
+    const tour = p.eventNames.find((n) => n.toLowerCase() !== p.artist.toLowerCase() && n.toLowerCase().includes(p.artist.toLowerCase()));
     const queries = [`"${p.artist}" presale code`, `"${p.artist}" "${p.saleName}" code ${p.city ?? ''}`.trim()];
+    // Close to the sale, spend a little more of the daily search budget on it.
+    if (until < 48 * 3_600_000) queries.push(tour ? `"${tour}" presale password` : `"${p.artist}" presale password`);
     for (const q of queries) {
       if (!ctx.cfg.demo && !(await canSpend(ctx, 'brave'))) break;
-      const last = await ctx.db.one<{ ran_at: number }>('SELECT ran_at FROM code_searches WHERE query = $1', [q]);
-      if (last && t - last.ran_at < everyMin * 60_000) continue;
+      if (!(await dueSearch(ctx, q, everyMin))) continue;
       try {
         const hits = await webSearch(ctx, q);
         if (!ctx.cfg.demo) await spend(ctx, 'brave');
         out.searches++;
-        const artist = [{ id: p.artistId, name: p.artist }];
         const found: Found[] = [];
         // Search snippets often contain the code already.
-        for (const h of hits) {
-          for (const c of extractArtistCodes(`${h.title}. ${h.snippet}`, artist))
-            found.push({ scope: 'artist', key: p.artistId, code: c.code, strength: c.strength * 0.9, hits: c.hits, url: h.url, snippet: c.snippet });
-        }
-        // Then open the most promising pages.
+        for (const h of hits) found.push(...findsIn(`${h.title}. ${h.snippet}`, p, h.url, null, 0.9));
+        // Then open the most promising pages; Reddit threads are read through the Reddit source.
         const pages = hits.filter((h) => !SKIP_HOSTS.test(domainOf(h.url))).slice(0, 4);
         for (const h of pages) {
           try {
-            const text = htmlToText(await fetchPage(ctx, h.url, 'generic'));
-            for (const c of extractArtistCodes(text, artist))
-              found.push({ scope: 'artist', key: p.artistId, code: c.code, strength: c.strength, hits: c.hits, url: h.url, snippet: c.snippet });
+            found.push(...findsIn(htmlToText(await fetchPage(ctx, h.url, 'generic')), p, h.url, null, 1));
           } catch (err: any) {
             out.errors.push(`${domainOf(h.url)}: ${String(err?.message ?? err).slice(0, 80)}`);
           }
         }
         out.promoted.push(...(await saveFound(ctx, found)));
-        await ctx.db.query(
-          `INSERT INTO code_searches (query, sale_id, ran_at, results) VALUES ($1, $2, $3, $4)
-           ON CONFLICT (query) DO UPDATE SET ran_at = $3, results = $4, sale_id = $2`,
-          [q, p.saleId, t, hits.length],
-        );
+        await recordSearch(ctx, q, p.saleId, hits.length);
       } catch (err: any) {
         out.errors.push(`search "${q}": ${String(err?.message ?? err).slice(0, 120)}`);
       }

@@ -26,6 +26,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tickSeconds: num(env.TICK_SECONDS, 300),
     codeScrapeIntervalMin: num(env.CODE_SCRAPE_INTERVAL_MIN, 180),
     braveApiKey: env.BRAVE_API_KEY || null,
+    redditClientId: env.REDDIT_CLIENT_ID || null,
+    redditClientSecret: env.REDDIT_CLIENT_SECRET || null,
     seatgeekClientId: env.SEATGEEK_CLIENT_ID || null,
     inventoryApiKey: env.TM_INVENTORY_API_KEY || null,
     demo,

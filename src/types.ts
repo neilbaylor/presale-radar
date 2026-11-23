@@ -7,6 +7,8 @@ export interface Config {
   tmApiKey: string | null;
   inventoryApiKey: string | null; // Ticketmaster Inventory Status API (approval required)
   braveApiKey: string | null;     // web search for presale codes
+  redditClientId: string | null;  // optional: Reddit's official API (cloud servers often get blocked without it)
+  redditClientSecret: string | null;
   seatgeekClientId: string | null; // second source + resale prices
   vapidPublicKey: string | null;
   vapidPrivateKey: string | null;
