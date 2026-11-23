@@ -334,3 +334,5 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 
 .btn-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .btn-pair .btn { min-width: 0; padding-left: 10px; padding-right: 10px; }
+
+.banner span svg { width: 15px; height: 15px; vertical-align: -2px; display: inline; margin: 0 1px; color: inherit; }

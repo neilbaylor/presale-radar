@@ -383,6 +383,12 @@ function tabBar() {
 // ============================================================ auth screens
 
 function authShell(title, sub, form, footer = '') {
+  // iPhone keeps Home Screen apps signed in separately from Safari: install first to sign in once.
+  const iosTip =
+    isIOS() && !isStandalone()
+      ? `<div class="banner small">${I.phone}<span>On iPhone, add this to your Home Screen first (tap ${I.share} then Add to Home Screen) and continue there. That way you only sign in once.</span></div>`
+      : '';
+  footer = iosTip + footer;
   app.innerHTML = `<div class="welcome">
     <div class="logo">${I.radar}</div>
     <div class="stack" style="gap:8px"><h1>${title}</h1><p class="muted">${sub}</p></div>
@@ -548,7 +554,7 @@ function renderOnboarding() {
       }</div>`;
     const canPush = !needsInstall && S.state.features.push && pushSupported();
     foot = canPush
-      ? `<button class="btn primary big block" data-act="enable-push" data-next="1">${I.bell} Turn on notifications</button><button class="btn ghost block" data-act="onb-next">Not now</button>`
+      ? `<button class="btn primary big block" data-act="enable-push" data-next="1">${I.bell} Turn on notifications</button><button class="btn ghost block" data-act="onb-skip-push">Not now</button>`
       : `<button class="btn primary big block" data-act="onb-next">Continue</button>`;
   } else {
     const cal = S.state.calendar;
@@ -669,6 +675,13 @@ function viewHome() {
   </div>`;
 }
 
+/** "Tue 10 PM", "Today 9:30 PM": short enough to never get cut off. */
+function shortWhen(ms) {
+  const d = fmtDay(ms);
+  const day = d === 'Today' || d === 'Tomorrow' ? d : fmt(ms, { weekday: 'short' });
+  return `${day} ${fmtTime(ms).replace(':00', '')}`;
+}
+
 function openSignups(artistId) {
   return (S.state.signups ?? []).filter((n) => !n.done && n.at > now() && (!artistId || n.artistId === artistId));
 }
@@ -679,7 +692,7 @@ function signupSection() {
   return `<div class="section"><div class="section-head"><h2>Sign up before it closes</h2></div><div class="list">${list
     .map(
       (n) => `<div class="item"><div class="ic-dot">${I.flag}</div><div class="grow"><div class="ellipsis"><b>${esc(n.artist)}</b></div>
-        <div class="small ellipsis" style="color:var(--warn);font-weight:600">Closes ${fmtDay(n.at)}, ${fmtTime(n.at)}</div>
+        <div class="small ellipsis" style="color:var(--warn);font-weight:600">Closes ${shortWhen(n.at)}</div>
         <div class="tiny faint ellipsis">${esc(n.label.replace(/^the /i, ''))}</div></div>
         <button class="icon-btn" data-act="signup-done" data-artist="${esc(n.artistId)}" data-label="${esc(n.label)}" data-at="${n.at}" aria-label="I'm signed up">${I.check}</button>
         <a class="btn sm primary" href="${esc(n.signupUrl ?? n.url)}" target="_blank" rel="noopener">Sign up</a></div>`,
@@ -690,7 +703,7 @@ function signupSection() {
 function signupBanner(artistId) {
   const n = openSignups(artistId)[0];
   if (!n) return '';
-  return `<div class="banner warn" style="margin-top:14px">${I.flag}<div class="grow"><b>${esc(n.label)}: sign up by ${fmtDay(n.at)}, ${fmtTime(n.at)}</b>
+  return `<div class="banner warn" style="margin-top:14px">${I.flag}<div class="grow"><b>${esc(n.label.replace(/^the /i, ''))}: sign up by ${shortWhen(n.at)}</b>
     <div class="small muted">No sign-up, no code.</div>
     <div class="row" style="margin-top:8px"><a class="btn sm primary" href="${esc(n.signupUrl ?? n.url)}" target="_blank" rel="noopener">Sign up</a>
     <button class="btn sm ghost" data-act="signup-done" data-artist="${esc(n.artistId)}" data-label="${esc(n.label)}" data-at="${n.at}">I'm signed up</button></div></div></div>`;
@@ -1103,7 +1116,7 @@ function viewShow(id) {
     <div class="action-row">
       ${hidden
         ? `<button class="action on" data-act="unhide-show" data-id="${esc(s.id)}">${I.eyeOff}Unhide</button>`
-        : `<button class="action ${s.level === 'remind' ? 'on' : ''}" data-act="${s.starred ? 'unstar' : s.level === 'remind' ? 'noop' : 'star'}" data-id="${esc(s.id)}">${s.level === 'remind' ? I.bell : I.bell}${s.level === 'remind' ? 'Reminding' : 'Remind me'}</button>`}
+        : `<button class="action ${s.level === 'remind' ? 'on' : ''}" data-act="${s.starred ? 'unstar' : s.level === 'remind' ? 'why-reminding' : 'star'}" data-id="${esc(s.id)}" data-reason="${esc(s.reason)}" data-artist="${esc(s.artist)}" data-venue="${esc(s.venue ?? '')}">${s.level === 'remind' ? I.bell : I.bell}${s.level === 'remind' ? 'Reminding' : 'Remind me'}</button>`}
       <button class="action ${s.gotTickets ? 'on good' : ''}" data-act="got" data-id="${esc(s.id)}">${I.done}${s.gotTickets ? 'Going' : 'Got tickets'}</button>
       <button class="action" data-act="hide-show" data-id="${esc(s.id)}" data-back="1">${I.eyeOff}Hide</button>
       ${s.artistId ? `<button class="action" data-act="mute" data-id="${esc(s.artistId)}" data-name="${esc(s.artist)}">${I.mute}Mute artist</button>` : '<span></span>'}
@@ -1388,7 +1401,16 @@ function viewSettings() {
       <div class="item tap" data-act="copy" data-text="${esc(st.calendarUrl)}">${I.copy}<div class="grow">Copy calendar link</div></div>
     </div><p class="tiny faint" style="margin:8px 4px">Each event links to a sale screen that works without signing in, plus "Got tickets" and "Not interested" links that clean up your calendar.</p></div>
 
-    <div class="section"><div class="section-head"><h2>Code finder</h2><button class="link-btn" data-act="codes-refresh">Scan now</button></div><div class="list">
+    ${st.me.role === 'owner' ? `<div class="section"><div class="section-head"><h2>People</h2></div><div class="list">
+      ${st.members.map((m) => `<div class="item">${I.user}<div class="grow"><b style="font-weight:600">${esc(m.name)}</b>${m.role === 'owner' ? ' <span class="pill">Owner</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>${m.role !== 'owner' ? `<button class="icon-btn plain" data-act="del-user" data-id="${m.id}" data-name="${esc(m.name)}" aria-label="Remove">${I.trash}</button>` : ''}</div>`).join('')}
+      <div class="item tap" data-act="invite">${I.plus}<div class="grow">Invite someone</div></div>
+      ${S.ui.invite ? `<div class="item" style="flex-direction:column;align-items:stretch;gap:8px"><div class="small muted">Send this link. It works once and expires in 7 days.</div><div class="code-box" style="padding:8px 8px 8px 12px"><div class="grow small mono ellipsis">${esc(S.ui.invite)}</div><button class="icon-btn" data-act="share-invite" aria-label="Share">${I.share}</button></div></div>` : ''}
+    </div></div>` : ''}
+
+    <div class="section"><div class="list">
+      <div class="item tap" data-act="toggle-advanced">${I.radar}<div class="grow">Sources and status<div class="small muted">${issues.length ? `${issues.length} thing${issues.length > 1 ? 's' : ''} to set up` : 'Code finder, venue websites, sync'}</div></div><span class="chev" style="transform:rotate(${S.ui.advanced ? 90 : 0}deg)">${I.chev}</span></div>
+    </div></div>
+    ${S.ui.advanced ? `    <div class="section"><div class="section-head"><h2>Code finder</h2><button class="link-btn" data-act="codes-refresh">Scan now</button></div><div class="list">
       ${st.codeSources
         .map(
           (s) => `<div class="item"><div class="grow"><div class="ellipsis small"><b style="font-weight:600">${esc(s.label || new URL(s.url).hostname)}</b></div>
@@ -1411,12 +1433,6 @@ function viewSettings() {
       <div class="item tap" data-act="sheet" data-kind="add-venue-page">${I.plus}<div class="grow">Add a venue's events page<div class="small muted">Catches shows sold outside Ticketmaster</div></div></div>
     </div></div>
 
-    ${st.me.role === 'owner' ? `<div class="section"><div class="section-head"><h2>People</h2></div><div class="list">
-      ${st.members.map((m) => `<div class="item">${I.user}<div class="grow"><b style="font-weight:600">${esc(m.name)}</b>${m.role === 'owner' ? ' <span class="pill">Owner</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>${m.role !== 'owner' ? `<button class="icon-btn plain" data-act="del-user" data-id="${m.id}" data-name="${esc(m.name)}" aria-label="Remove">${I.trash}</button>` : ''}</div>`).join('')}
-      <div class="item tap" data-act="invite">${I.plus}<div class="grow">Invite someone</div></div>
-      ${S.ui.invite ? `<div class="item" style="flex-direction:column;align-items:stretch;gap:8px"><div class="small muted">Send this link. It works once and expires in 7 days.</div><div class="code-box" style="padding:8px 8px 8px 12px"><div class="grow small mono ellipsis">${esc(S.ui.invite)}</div><button class="icon-btn" data-act="share-invite" aria-label="Share">${I.share}</button></div></div>` : ''}
-    </div></div>` : ''}
-
     <div class="section"><div class="section-head"><h2>Status</h2>${sync?.lastEnd ? `<span class="tiny faint">Synced ${ago(sync.lastEnd)}</span>` : ''}</div>
       ${issues.length ? `<div class="stack" style="gap:8px">${issues.map((i) => `<div class="banner warn">${I.alert}<span>${i}</span></div>`).join('')}</div>` : `<div class="banner">${I.done}<span>Everything is connected.</span></div>`}
       ${st.venues.concat(st.artists).some((x) => x.lastError) ? `<p class="small" style="color:var(--bad);margin:8px 4px">Some sources failed on their last sync. They retry automatically.</p>` : ''}
@@ -1433,6 +1449,7 @@ function viewSettings() {
       <button class="btn block soft" style="margin-top:10px" data-act="refresh-now">${I.refresh} Check for new shows now</button>
     </div>
 
+` : ''}
     <div class="section"><div class="section-head"><h2>Account</h2></div><div class="list">
       <div class="item">${I.user}<div class="grow"><b style="font-weight:600">${esc(st.me.name)}</b><div class="small muted">${esc(st.me.email)}</div></div></div>
       <div class="item tap" data-act="logout">${I.logout}<div class="grow">Sign out</div></div>
@@ -1560,6 +1577,16 @@ const handlers = {
   },
   back: () => (history.length > 1 ? history.back() : go('#/')),
   noop: () => {},
+  'toggle-advanced': () => {
+    S.ui.advanced = !S.ui.advanced;
+    render();
+  },
+  'why-reminding': (el) =>
+    toast(
+      el.dataset.reason === 'artist'
+        ? `On because you follow ${el.dataset.artist}. Use Hide or Mute to stop.`
+        : `On for every show at ${el.dataset.venue}. Change it in Settings, then Venues.`,
+    ),
   'toast-undo': () => {
     toastEl.classList.remove('show');
     toastEl._undo?.();
@@ -1574,6 +1601,10 @@ const handlers = {
     if (S.ui.onbStep === 1) S.ui.suggested = null;
     render();
     window.scrollTo(0, 0);
+  },
+  'onb-skip-push': () => {
+    localStorage.setItem('nudge-push', 'no');
+    handlers['onb-next']();
   },
   'onb-back': () => {
     S.ui.onbStep = Math.max(0, S.ui.onbStep - 1);
