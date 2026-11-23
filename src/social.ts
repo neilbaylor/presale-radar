@@ -5,6 +5,8 @@
  *    most relevant threads (codes are almost always in comments, often with
  *    "worked!" or "didn't work" replies under them).
  *  - Bluesky: public post search, newest first.
+ *  - X: only with X_BEARER_TOKEN, since X charges per post read. Used just in
+ *    the two days before a presale and capped per day (X_DAILY_POSTS).
  *
  * Both are public. Neither needs a key, though Reddit often blocks cloud
  * servers without one, so REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET (a free
@@ -87,6 +89,17 @@ export function parseBlueskySearch(json: any): SocialPost[] {
   });
 }
 
+/** X recent search -> posts. */
+export function parseXSearch(json: any): SocialPost[] {
+  return (json?.data ?? []).map((p: any) => ({
+    url: `https://x.com/i/web/status/${p.id}`,
+    domain: `x.com/${p.author_id ?? 'unknown'}`,
+    text: p.text ?? '',
+    replies: '',
+    createdMs: Date.parse(p.created_at ?? '') || 0,
+  }));
+}
+
 // ---------------------------------------------------------------- fetching
 
 async function resting(ctx: Ctx, source: string): Promise<boolean> {
@@ -159,6 +172,36 @@ export async function searchBluesky(ctx: Ctx, artist: string): Promise<SocialPos
   if (ctx.cfg.demo || (await resting(ctx, 'bluesky'))) return [];
   const qs = new URLSearchParams({ q: `"${artist}" presale code`, sort: 'latest', limit: '50' });
   return parseBlueskySearch(await getJson(ctx, 'bluesky', `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?${qs}`));
+}
+
+/** Newest 10 original posts about the artist's presale. Each post read costs money, so the daily cap is checked first. */
+export async function searchX(ctx: Ctx, artist: string): Promise<SocialPost[]> {
+  if (ctx.cfg.demo || !ctx.cfg.xBearerToken || (await resting(ctx, 'x'))) return [];
+  if (!(await canSpend(ctx, 'x', 10))) throw new Error('Daily X post limit reached');
+  const qs = new URLSearchParams({
+    query: `"${artist}" (presale OR code OR password) -is:retweet`,
+    max_results: '10',
+    sort_order: 'recency',
+    'tweet.fields': 'created_at,author_id',
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const res = await fetch(`https://api.x.com/2/tweets/search/recent?${qs}`, {
+      signal: controller.signal,
+      headers: { authorization: `Bearer ${ctx.cfg.xBearerToken}`, 'user-agent': UA },
+    });
+    if ([401, 402, 403, 429].includes(res.status)) {
+      await setSetting(ctx, 'rest:x', now(ctx) + COOLDOWN_MS);
+      throw new Error(`X said ${res.status}${res.status === 402 ? ' (out of credits)' : ''}; resting for a few hours`);
+    }
+    if (!res.ok) throw new Error(`X HTTP ${res.status}`);
+    const posts = parseXSearch(await res.json());
+    await spend(ctx, 'x', posts.length);
+    return posts;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------- weighing

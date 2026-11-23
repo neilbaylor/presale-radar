@@ -9,6 +9,8 @@ export interface Config {
   braveApiKey: string | null;     // web search for presale codes
   redditClientId: string | null;  // optional: Reddit's official API (cloud servers often get blocked without it)
   redditClientSecret: string | null;
+  xBearerToken: string | null;    // optional: X's paid API (about half a cent per post read)
+  xDailyPosts: number;            // cap on X posts read per day, which caps the cost
   seatgeekClientId: string | null; // second source + resale prices
   vapidPublicKey: string | null;
   vapidPrivateKey: string | null;

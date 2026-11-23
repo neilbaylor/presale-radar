@@ -17,7 +17,7 @@ import { confidenceLabel, getAllFollows, getSetting, interest, now, setSetting, 
 import { demoCodePage, demoSearch } from './demo.js';
 import { enqueue } from './notify.js';
 import { canSpend, spend } from './budget.js';
-import { feedbackAdjust, recencyFactor, searchBluesky, searchReddit, tourWordBoost, type SocialPost } from './social.js';
+import { feedbackAdjust, recencyFactor, searchBluesky, searchReddit, searchX, tourWordBoost, type SocialPost } from './social.js';
 
 // ---------------------------------------------------------------- extraction
 
@@ -375,7 +375,7 @@ export async function webSearch(ctx: Ctx, query: string): Promise<SearchHit[]> {
 }
 
 /** Pages not worth opening: Ticketmaster's own app pages, logins, video. */
-const SKIP_HOSTS = /(^|\.)(reddit\.com|bsky\.app|ticketmaster\.(ca|com)|livenation\.com|facebook\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|stubhub|vividseats|seatgeek)/i;
+const SKIP_HOSTS = /(^|\.)(reddit\.com|bsky\.app|threads\.net|ticketmaster\.(ca|com)|livenation\.com|facebook\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|stubhub|vividseats|seatgeek)/i;
 
 // ---------------------------------------------------------------- jobs
 
@@ -534,12 +534,15 @@ export async function searchForCodes(ctx: Ctx): Promise<{ searches: number; prom
     socialDone.add(p.artistId);
     const until = p.startUtc - t;
     const everyMin = until < 3 * 3_600_000 ? 10 : until < 48 * 3_600_000 ? 30 : 6 * 60;
-    for (const [source, run] of [
-      ['reddit', () => searchReddit(ctx, p.artist, until < 48 * 3_600_000 ? 4 : 2)],
-      ['bluesky', () => searchBluesky(ctx, p.artist)],
-    ] as [string, () => Promise<SocialPost[]>][]) {
+    const sources: [string, number, () => Promise<SocialPost[]>][] = [
+      ['reddit', everyMin, () => searchReddit(ctx, p.artist, until < 48 * 3_600_000 ? 4 : 2)],
+      ['bluesky', everyMin, () => searchBluesky(ctx, p.artist)],
+    ];
+    // X costs per post, so only in the last two days, and less often until the final hours.
+    if (ctx.cfg.xBearerToken && until < 48 * 3_600_000) sources.push(['x', until < 3 * 3_600_000 ? 15 : 120, () => searchX(ctx, p.artist)]);
+    for (const [source, every, run] of sources) {
       const q = `${source}:${p.artist}`;
-      if (!(await dueSearch(ctx, q, everyMin))) continue;
+      if (!(await dueSearch(ctx, q, every))) continue;
       try {
         const posts = await run();
         const found = posts.flatMap((post) => findsIn(post.text, p, post.url, post.domain, recencyFactor(post.createdMs, t), post.replies));

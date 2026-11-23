@@ -3,7 +3,7 @@ import { makeCtx, tmEvent, HOUR, DAY } from './helpers.js';
 import { normalizeEvent } from '../src/tm.js';
 import { upsertEvent } from '../src/sync.js';
 import { searchForCodes, extractArtistCodes } from '../src/codes.js';
-import { feedbackAdjust, parseBlueskySearch, parseRedditListing, parseRedditThread, recencyFactor, tourWordBoost } from '../src/social.js';
+import { feedbackAdjust, parseXSearch, parseBlueskySearch, parseRedditListing, parseRedditThread, recencyFactor, tourWordBoost } from '../src/social.js';
 
 const sec = (ms: number) => ms / 1000;
 
@@ -122,5 +122,37 @@ describe('finding leaked codes end to end', () => {
     ctx.clock.t += 15 * 60_000; // due again by schedule, but still resting
     await searchForCodes(ctx);
     expect(calls).toBe(before);
+  });
+
+  it('searches X only with a token, only in the last two days, and stops at the daily post cap', async () => {
+    const ctx = await makeCtx({ DEMO: '0', X_BEARER_TOKEN: 'tok', X_DAILY_POSTS: '20' });
+    const t = ctx.clock.t;
+    const { event, sales } = normalizeEvent(tmEvent({ id: 'E3', artistId: 'ID', artist: 'Imagine Dragons', showUtc: t + 200 * DAY, presales: [{ name: 'Artist Presale', startUtc: t + 5 * DAY }] }));
+    await upsertEvent(ctx, event, sales, true);
+    const tweets = { data: Array.from({ length: 10 }, (_, i) => ({ id: String(100 + i), author_id: `u${i}`, created_at: new Date(t - HOUR).toISOString(), text: i < 2 ? 'Imagine Dragons presale code: LOOMTOUR' : 'Imagine Dragons presale tomorrow!' })) };
+    const xCalls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.includes('api.x.com')) xCalls.push(url);
+      const body = url.includes('api.x.com') ? tweets : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    await searchForCodes(ctx);
+    expect(xCalls).toEqual([]); // presale is 5 days out
+
+    ctx.clock.t = t + 4 * DAY + 22 * HOUR; // 2 hours to go
+    await searchForCodes(ctx);
+    expect(xCalls).toHaveLength(1);
+    expect(xCalls[0]).toContain('max_results=10');
+    const row = await ctx.db.one<{ score: number; domains: string[] }>(`SELECT score, domains FROM web_codes WHERE key = 'ID' AND code = 'LOOMTOUR'`);
+    expect(row!.domains).toEqual(['x.com/u0', 'x.com/u1']);
+    expect(parseXSearch(tweets)[0].url).toBe('https://x.com/i/web/status/100');
+
+    ctx.clock.t += 16 * 60_000;
+    await searchForCodes(ctx);
+    expect(xCalls).toHaveLength(2); // 20 posts read: the cap
+    ctx.clock.t += 16 * 60_000;
+    const res = await searchForCodes(ctx);
+    expect(xCalls).toHaveLength(2);
+    expect(res.errors.some((e) => /X post limit/.test(e))).toBe(true);
   });
 });

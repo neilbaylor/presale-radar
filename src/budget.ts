@@ -8,6 +8,7 @@ export const DAILY_LIMITS = {
   brave: 30, // roughly what Brave's monthly free credit covers
   web: 3000, // venue sites, help articles, code pages
   social: 1500, // Reddit and Bluesky searches and threads
+  x: 300, // X posts read (paid per post; X_DAILY_POSTS overrides)
 } as const;
 export type Provider = keyof typeof DAILY_LIMITS;
 
@@ -25,7 +26,7 @@ export async function spend(ctx: Ctx, provider: Provider, n = 1): Promise<void> 
 export async function usage(ctx: Ctx, provider: Provider): Promise<{ calls: number; limit: number; ratio: number }> {
   const row = await ctx.db.one<{ calls: number }>('SELECT calls FROM api_usage WHERE provider = $1 AND day = $2', [provider, day(ctx)]);
   const calls = row?.calls ?? 0;
-  const limit = DAILY_LIMITS[provider];
+  const limit = provider === 'x' ? ctx.cfg.xDailyPosts : DAILY_LIMITS[provider];
   return { calls, limit, ratio: calls / limit };
 }
 

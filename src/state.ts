@@ -168,6 +168,8 @@ export async function buildState(ctx: Ctx, user: User, baseUrl: string) {
       webSearch: !!ctx.cfg.braveApiKey || ctx.cfg.demo,
       soldOutWatch: inventoryEnabled(ctx),
       seatgeek: seatgeekEnabled(ctx),
+      x: !!ctx.cfg.xBearerToken,
+      xLimit: ctx.cfg.xDailyPosts,
       ticketmaster: !!ctx.cfg.tmApiKey || ctx.cfg.demo,
       demo: ctx.cfg.demo,
     },
