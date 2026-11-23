@@ -1231,13 +1231,13 @@ function viewGo(saleId) {
       ? ''
       : `<button class="btn ${phase === 'prep' ? 'dark' : 'primary'} big block" data-act="buy" data-sale="${esc(sale.id)}">
            ${best ? `${I.copy} Copy code and open Ticketmaster` : `Open Ticketmaster ${I.external}`}</button>
-         <p class="small muted" style="text-align:center">${
+         <p class="small muted one-line" style="text-align:center">${
            phase === 'prep'
-             ? 'The waiting room usually opens 10 to 30 minutes before.'
+             ? 'Waiting room opens 10–30 min before.'
              : phase === 'soon'
-               ? 'Join the waiting room now. Your spot is random, not first come.'
+               ? 'Join now. Queue spots are random.'
                : best
-                 ? 'Paste the code when Ticketmaster asks for it.'
+                 ? 'Paste the code when asked.'
                  : 'Head straight in.'
          }</p>
          ${phase === 'prep' || phase === 'soon' ? `<a class="link-btn signin-link" href="${esc(tmOrigin(show, sale))}/user/orders" target="_blank" rel="noopener">Sign in to Ticketmaster ahead of time ${I.external}</a>` : ''}`;
