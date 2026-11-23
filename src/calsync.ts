@@ -5,7 +5,10 @@
  */
 import type { Ctx } from './types.js';
 import { getUser, now } from './db.js';
-import { DavError, deleteResource, discoverHome, ensureCalendar, eventHref, ICLOUD_SERVER, putEvent, type DavCreds } from './caldav.js';
+import { DavError, deleteResource, discoverHome, ensureCalendar, eventHref, ICLOUD_SERVER, listEventPaths, putEvent, type DavCreds } from './caldav.js';
+import { setUserEvent } from './db.js';
+import { signedUpKey } from './help.js';
+import { enqueue } from './notify.js';
 import { baseUrlFor, calendarEntries, singleEventIcs } from './ics.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 
@@ -77,6 +80,7 @@ async function doSync(ctx: Ctx, userId: number): Promise<{ put: number; deleted:
   let put = 0;
   let deleted = 0;
   try {
+    await applyCalendarDeletes(ctx, acct, creds, userId);
     const desired = await calendarEntries(ctx, user, await baseUrlFor(ctx));
     const existing = new Map(
       (await ctx.db.query<{ uid: string; href: string; hash: string }>('SELECT uid, href, hash FROM calendar_items WHERE user_id = $1', [userId])).map(
@@ -90,9 +94,9 @@ async function doSync(ctx: Ctx, userId: number): Promise<{ put: number; deleted:
       const href = have?.href ?? eventHref(acct.calendar_url, d.uid);
       await putEvent(href, singleEventIcs(d, t), creds);
       await ctx.db.query(
-        `INSERT INTO calendar_items (user_id, uid, href, hash, updated_at) VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (user_id, uid) DO UPDATE SET href = $3, hash = $4, updated_at = $5`,
-        [userId, d.uid, href, d.hash, t],
+        `INSERT INTO calendar_items (user_id, uid, href, hash, updated_at, kind, target) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (user_id, uid) DO UPDATE SET href = $3, hash = $4, updated_at = $5, kind = $6, target = $7`,
+        [userId, d.uid, href, d.hash, t, d.kind, d.target],
       );
       put++;
     }
@@ -108,6 +112,55 @@ async function doSync(ctx: Ctx, userId: number): Promise<{ put: number; deleted:
     console.error('[calendar]', msg);
   }
   return { put, deleted };
+}
+
+/**
+ * Deleting a presale event in Calendar is the natural way to say "not for me":
+ * treat it like tapping Hide (or "I'm signed up" for a sign-up reminder).
+ * If the whole calendar vanished, or most events disappeared at once, that's
+ * not a choice about shows, so we put everything back instead.
+ */
+async function applyCalendarDeletes(ctx: Ctx, acct: Account, creds: DavCreds, userId: number): Promise<void> {
+  const items = await ctx.db.query<{ uid: string; href: string; kind: string; target: string }>(
+    'SELECT uid, href, kind, target FROM calendar_items WHERE user_id = $1',
+    [userId],
+  );
+  if (!items.length) return;
+  const onServer = await listEventPaths(acct.calendar_url!, creds);
+  if (onServer === null) {
+    // The Presales calendar itself was deleted: recreate it and re-add everything.
+    const calendarUrl = await ensureCalendar(acct.home_url!, creds);
+    await ctx.db.query('UPDATE calendar_accounts SET calendar_url = $1 WHERE user_id = $2', [calendarUrl, userId]);
+    acct.calendar_url = calendarUrl;
+    await ctx.db.query('DELETE FROM calendar_items WHERE user_id = $1', [userId]);
+    return;
+  }
+  const missing = items.filter((i) => !onServer.has(decodeURIComponent(new URL(i.href).pathname)));
+  if (!missing.length) return;
+  if (missing.length > 3 && missing.length > items.length / 2) {
+    await ctx.db.query('DELETE FROM calendar_items WHERE user_id = $1 AND uid = ANY($2::text[])', [userId, missing.map((m) => m.uid)]);
+    return; // looks like a bulk wipe or a server hiccup: re-add on this sync
+  }
+  for (const m of missing) {
+    if (m.kind === 'signup') {
+      const [artistId, label, at] = m.target.split('|');
+      await ctx.db.query('INSERT INTO job_marks (key, at) VALUES ($1, $2) ON CONFLICT DO NOTHING', [signedUpKey(userId, artistId, label, Number(at)), now(ctx)]);
+    } else {
+      const ids = m.target.split(',').filter(Boolean);
+      for (const id of ids) await setUserEvent(ctx, userId, id, { state: 'dismissed', seen: true });
+      const ev = ids[0] ? await ctx.db.one<{ name: string; attraction_names: string[] }>('SELECT name, attraction_names FROM events WHERE id = $1', [ids[0]]) : null;
+      if (ev)
+        await enqueue(ctx, userId, {
+          type: 'calendar_hide',
+          priority: 'silent',
+          dedupeKey: `calhide:${m.uid}:${now(ctx)}`,
+          eventId: ids[0],
+          title: `Hid ${ev.attraction_names[0] ?? ev.name}`,
+          body: 'You deleted it from your calendar. Undo from the show page.',
+        });
+    }
+    await ctx.db.query('DELETE FROM calendar_items WHERE user_id = $1 AND uid = $2', [userId, m.uid]);
+  }
 }
 
 /** Called after anything a person does that could change their calendar. Coalesces bursts. */

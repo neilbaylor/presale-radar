@@ -115,3 +115,20 @@ export async function deleteResource(href: string, creds: DavCreds): Promise<voi
   const r = await dav('DELETE', href, creds);
   if (![200, 204, 404].includes(r.status)) throw authError(r.status);
 }
+
+/** Paths of every event currently in the calendar, or null if the calendar itself is gone. */
+export async function listEventPaths(calendarUrl: string, creds: DavCreds): Promise<Set<string> | null> {
+  const r = await dav('PROPFIND', calendarUrl, creds, {
+    body: '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>',
+    depth: '1',
+  });
+  if (r.status === 404) return null;
+  if (r.status !== 207) throw authError(r.status);
+  const self = new URL(calendarUrl).pathname.replace(/\/?$/, '/');
+  const paths = new Set<string>();
+  for (const m of r.text.matchAll(/<(?:[\w-]+:)?href[^>]*>\s*([^<\s]+)\s*<\/(?:[\w-]+:)?href>/gi)) {
+    const path = decodeURIComponent(new URL(m[1], r.url).pathname);
+    if (path.replace(/\/?$/, '/') !== self) paths.add(path);
+  }
+  return paths;
+}

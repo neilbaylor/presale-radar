@@ -16,7 +16,7 @@ import { previewDigest } from './notify.js';
 import { pushToUser } from './push.js';
 import { syncDue, tick } from './jobs.js';
 import { connectICloud, disconnectCalendar, scheduleCalendarSync } from './calsync.js';
-import { linkSig } from './secrets.js';
+import { linkSig, resolveShortLink, shortLink } from './secrets.js';
 import { setSetting } from './db.js';
 import { DavError } from './caldav.js';
 import { signedUpKey } from './help.js';
@@ -178,16 +178,8 @@ export function createApp(ctx: Ctx) {
     const show = [...state.shows, ...state.hidden].find((s) => s.sales.some((x: any) => x.id === ok.id));
     if (!show) return c.json({ error: "This sale isn't listed anymore." }, 404);
     const base = baseUrl(ctx, c);
-    const [got, hide] = await Promise.all([linkSig(ctx, ok.uid, 'got', show.id), linkSig(ctx, ok.uid, 'hide', show.id)]);
-    return c.json({
-      show,
-      saleId: ok.id,
-      name: user.name,
-      links: {
-        got: `${base}/l/got/${ok.uid}/${encodeURIComponent(show.id)}/${got}`,
-        hide: `${base}/l/hide/${ok.uid}/${encodeURIComponent(show.id)}/${hide}`,
-      },
-    });
+    const [got, hide] = await Promise.all([shortLink(ctx, base, ok.uid, 'got', show.id), shortLink(ctx, base, ok.uid, 'hide', show.id)]);
+    return c.json({ show, saleId: ok.id, name: user.name, links: { got, hide } });
   });
 
   for (const kind of ['got', 'hide'] as const) {
@@ -219,6 +211,35 @@ export function createApp(ctx: Ctx) {
       return c.html(page(verb, `<h1>${kind === 'got' ? '🎉' : '👍'}</h1><p>${done}</p><p class="m"><a href="/">Open Presale Radar</a></p>`));
     });
   }
+
+  // Short links from calendar notes. Got tickets / Not for me act on one tap, with Undo.
+  app.get('/s/:token', async (c) => {
+    const link = await resolveShortLink(ctx, c.req.param('token'));
+    if (!link) return c.html(page('Link expired', '<h1>Link expired</h1><p class="m">This link is no longer valid.</p>'), 404);
+    if (link.kind === 'sale') {
+      const sig = await linkSig(ctx, link.userId, 'sale', link.target);
+      return c.redirect(`/#/link/${link.userId}/${encodeURIComponent(link.target)}/${sig}`, 302);
+    }
+    const ids = link.target.split(',').filter(Boolean);
+    for (const id of ids) await setUserEvent(ctx, link.userId, id, link.kind === 'got' ? { got_tickets: true } : { state: 'dismissed', seen: true });
+    scheduleCalendarSync(ctx, link.userId, 0);
+    const ev = ids[0] ? await ctx.db.one<{ name: string; attraction_names: string[] }>('SELECT name, attraction_names FROM events WHERE id = $1', [ids[0]]) : null;
+    const who = escHtml(ev?.attraction_names?.[0] ?? ev?.name ?? 'this show');
+    const msg = link.kind === 'got'
+      ? `<h1>🎉 Enjoy ${who}</h1><p>Reminders are off and it's leaving your calendar.</p>`
+      : `<h1>👍 Done</h1><p>${who} won't bother you again, and it's leaving your calendar.</p>`;
+    return c.html(page('Done', `${msg}<form method="post" action="/s/${escHtml(c.req.param('token'))}/undo"><button class="ghost">Undo</button></form>
+      <p class="m">You can close this and go back to Calendar.</p>`));
+  });
+
+  app.post('/s/:token/undo', async (c) => {
+    const link = await resolveShortLink(ctx, c.req.param('token'));
+    if (!link || link.kind === 'sale') return c.html(page('Link expired', '<h1>Link expired</h1>'), 404);
+    for (const id of link.target.split(',').filter(Boolean))
+      await setUserEvent(ctx, link.userId, id, link.kind === 'got' ? { got_tickets: false } : { state: 'auto' });
+    scheduleCalendarSync(ctx, link.userId, 0);
+    return c.html(page('Undone', `<h1>↩︎ Undone</h1><p>It's back in your calendar in a moment.</p>`));
+  });
 
   // ------------------------------------------------------------ everything below needs a session
 
@@ -671,6 +692,7 @@ function page(title: string, body: string): string {
 <style>body{font:17px/1.5 -apple-system,system-ui,sans-serif;background:#0f0f12;color:#f4f3f0;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
 main{max-width:380px;padding:32px 24px;text-align:center}h1{font-size:28px;margin:0 0 8px}.m{color:rgba(244,243,240,.6);font-size:15px}
 button{width:100%;margin:22px 0 8px;padding:16px;border:0;border-radius:16px;background:#ff5a36;color:#fff;font:600 17px -apple-system,system-ui,sans-serif}
+button.ghost{background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4)}
 a{color:#ff8a6e}@media(prefers-color-scheme:light){body{background:#f6f5f2;color:#16161a}.m{color:rgba(22,22,26,.6)}}</style></head>
 <body><main>${body}</main></body></html>`;
 }

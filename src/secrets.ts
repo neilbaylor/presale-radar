@@ -27,3 +27,27 @@ export async function linkSig(ctx: Ctx, userId: number, kind: string, id: string
 export async function linkUrl(ctx: Ctx, base: string, userId: number, kind: 'sale' | 'got' | 'hide', id: string): Promise<string> {
   return `${base}/l/${kind}/${userId}/${encodeURIComponent(id)}/${await linkSig(ctx, userId, kind, id)}`;
 }
+
+const B62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+/**
+ * Short, unguessable link for calendar notes ("radar.app/s/k3J9xQ2m").
+ * The same user + action + target always gets the same token.
+ */
+export async function shortLink(ctx: Ctx, base: string, userId: number, kind: 'sale' | 'got' | 'hide', target: string): Promise<string> {
+  const bytes = crypto.getRandomValues(new Uint8Array(10));
+  const fresh = [...bytes].map((b) => B62[b % 62]).join('');
+  const row = await ctx.db.one<{ token: string }>(
+    `INSERT INTO short_links (token, user_id, kind, target, created_at) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (user_id, kind, target) DO UPDATE SET user_id = excluded.user_id
+     RETURNING token`,
+    [fresh, userId, kind, target, Date.now()],
+  );
+  return `${base}/s/${row!.token}`;
+}
+
+export async function resolveShortLink(ctx: Ctx, token: string): Promise<{ userId: number; kind: string; target: string } | null> {
+  if (!/^[0-9A-Za-z]{6,16}$/.test(token)) return null;
+  const row = await ctx.db.one<{ user_id: number; kind: string; target: string }>('SELECT user_id, kind, target FROM short_links WHERE token = $1', [token]);
+  return row ? { userId: Number(row.user_id), kind: row.kind, target: row.target } : null;
+}

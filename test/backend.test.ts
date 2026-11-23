@@ -267,9 +267,9 @@ describe('calendar and state', () => {
     await ingest(ctx, tmEvent({ id: 'E1', artistId: 'A1', artist: 'Glass Harbour', showUtc: t + 60 * DAY, presales: [{ name: 'Artist Presale', startUtc: t + 2 * DAY }] }), true);
     await ingest(ctx, tmEvent({ id: 'E2', artistId: 'A2', artist: 'Lake Effect', showUtc: t + 61 * DAY, presales: [{ name: 'Artist Presale', startUtc: t + 2 * DAY }] }), true);
     const ics = await buildCalendar(ctx, (await getUser(ctx, uid))!, 'https://app.test');
-    expect(ics).toContain('SUMMARY:🎟 Glass Harbour: Artist Presale');
+    expect(ics.replace(/\r\n /g, '')).toContain('SUMMARY:🎟 Glass Harbour Artist presale');
     expect(ics).not.toContain('Lake Effect');
-    expect(ics.replace(/\r\n /g, '')).toMatch(/URL:https:\/\/app\.test\/l\/sale\/\d+\/E1%3Aartist-presale\/[\w-]+/);
+    expect(ics.replace(/\r\n /g, '')).toMatch(/URL:https:\/\/app\.test\/s\/[0-9A-Za-z]{10}/);
     expect(ics).toContain('BEGIN:VALARM'); // no push devices yet, so the calendar alarms
     for (const line of ics.split('\r\n')) expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
 

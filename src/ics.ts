@@ -7,7 +7,7 @@ import type { Ctx, EventRow, SaleRow, User } from './types.js';
 import { codesForSale, getFollows, getSetting, interest, loadCodeContext, now, userEventMap } from './db.js';
 import { headliner } from './sync.js';
 import { requirementHint } from './reminders.js';
-import { linkUrl } from './secrets.js';
+import { shortLink } from './secrets.js';
 import { formatDate, sha256 } from './util.js';
 
 function esc(s: string): string {
@@ -43,6 +43,8 @@ export interface CalEntry {
   uid: string;
   saleId: string;
   eventId: string;
+  kind: 'sale' | 'signup';
+  target: string; // comma-separated event ids, or the sign-up key
   body: string[]; // VEVENT content lines (without DTSTAMP), already folded
   hash: string;
 }
@@ -74,47 +76,60 @@ export async function calendarEntries(ctx: Ctx, user: User, baseUrl: string): Pr
   // With push on, the app already pings 15 minutes before; a calendar alarm too would be a double ping.
   const withAlarm = (devices?.n ?? 0) === 0;
 
-  const out: CalEntry[] = [];
+  // One calendar event per sale moment: a tour's two Toronto dates with the same
+  // presale at the same time become one event, not two identical ones.
+  type Row = (typeof rows)[number];
+  const groups = new Map<string, Row[]>();
   for (const r of rows) {
     const state = ue.get(`${user.id}:${r.event_id}`);
     if (state?.got_tickets || interest(r.ev, state, follows).level !== 'remind') continue;
+    const key = `${r.ev.attraction_ids?.[0] ?? r.ev.name}|${r.kind}|${r.name.toLowerCase()}|${r.start_utc}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+
+  const out: CalEntry[] = [];
+  for (const group of groups.values()) {
+    group.sort((a, b) => (a.ev.local_date ?? '').localeCompare(b.ev.local_date ?? ''));
+    const r = group[0];
+    const eventIds = [...new Set(group.map((g) => g.event_id))];
     const who = headliner(r.ev);
-    const saleName = r.kind === 'public' ? 'On-sale' : r.name;
+    const saleName = r.kind === 'public' ? 'On-sale' : r.name.replace(/\s*pre-?sale$/i, ' presale').trim();
+    const list = codesForSale(r, r.ev.attraction_ids ?? [], codes);
+    const best = list[0];
+    // Show the code right in the title when we trust it.
+    const titleCode = best && (best.source !== 'web' || best.confidence === 'high') ? ` · ${best.code}` : '';
     const [open, got, hide] = await Promise.all([
-      linkUrl(ctx, baseUrl, user.id, 'sale', r.id),
-      linkUrl(ctx, baseUrl, user.id, 'got', r.event_id),
-      linkUrl(ctx, baseUrl, user.id, 'hide', r.event_id),
+      shortLink(ctx, baseUrl, user.id, 'sale', r.id),
+      shortLink(ctx, baseUrl, user.id, 'got', eventIds.join(',')),
+      shortLink(ctx, baseUrl, user.id, 'hide', eventIds.join(',')),
     ]);
-    const hint = requirementHint(r, codesForSale(r, r.ev.attraction_ids ?? [], codes));
+    const dates = group.map((g) => `${formatDate(g.ev.local_date)} · ${g.ev.venue_name ?? ''}`);
     const desc = [
-      `${who} at ${r.ev.venue_name ?? ''}, ${formatDate(r.ev.local_date)}`,
-      hint,
+      requirementHint(r, list),
       '',
-      `▶ Open the sale screen (code copied, one tap to Ticketmaster):`,
-      open,
+      `Buy: ${open}`,
       '',
-      `✓ Got tickets? Stop reminding me:`,
-      got,
+      ...(group.length > 1 ? ['Shows:', ...dates.map((d) => `• ${d}`)] : [dates[0]]),
       '',
-      `✕ Not interested? Remove this show:`,
-      hide,
-    ]
-      .filter((l) => l !== null)
-      .join('\n');
+      `Got tickets: ${got}`,
+      `Not for me: ${hide}`,
+      'Or just delete this event.',
+    ].join('\n');
     const body = [
       `UID:${uidFor(r.id)}`,
       `DTSTART:${stamp(r.start_utc!)}`,
       'DURATION:PT30M',
-      fold(`SUMMARY:${esc(`🎟 ${who}: ${saleName}`)}`),
-      fold(`LOCATION:${esc(r.ev.venue_name ?? '')}`),
+      fold(`SUMMARY:${esc(`🎟 ${who} ${saleName}${titleCode}`)}`),
+      fold(`LOCATION:${esc(group.length > 1 ? `${group.length} dates` : r.ev.venue_name ?? '')}`),
       fold(`DESCRIPTION:${esc(desc)}`),
       fold(`URL:${open}`),
       ...(withAlarm
         ? ['BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT15M', fold(`DESCRIPTION:${esc(`${who} ${saleName} in 15 minutes`)}`), 'END:VALARM']
         : []),
     ];
-    out.push({ uid: uidFor(r.id), saleId: r.id, eventId: r.event_id, body, hash: await sha256(body.join('\n')) });
+    out.push({ uid: uidFor(r.id), saleId: r.id, eventId: r.event_id, kind: 'sale', target: eventIds.join(','), body, hash: await sha256(body.join('\n')) });
   }
+
   // Sign-up deadlines for artists you follow (skipped once you tap "I'm signed up").
   const signups = await ctx.db.query<{ artist_id: string; name: string; label: string; at_utc: number; url: string; signup_url: string | null; done: boolean }>(
     `SELECT n.artist_id, a.name, n.label, n.at_utc, n.url, n.signup_url,
@@ -133,10 +148,10 @@ export async function calendarEntries(ctx: Ctx, user: User, baseUrl: string): Pr
       `DTSTART:${stamp(n.at_utc - 60 * 60_000)}`,
       'DURATION:PT1H',
       fold(`SUMMARY:${esc(`✍️ Sign up: ${n.name} ${n.label}`)}`),
-      fold(`DESCRIPTION:${esc(`Sign-up closes at the end of this event. Without it there's no presale code.\n\n${link}`)}`),
+      fold(`DESCRIPTION:${esc(`Sign-up closes at the end of this event. Without it there's no presale code.\n\nSign up: ${link}\n\nAlready signed up? Delete this event.`)}`),
       fold(`URL:${link}`),
     ];
-    out.push({ uid, saleId: uid, eventId: n.artist_id, body, hash: await sha256(body.join('\n')) });
+    out.push({ uid, saleId: uid, eventId: n.artist_id, kind: 'signup', target: `${n.artist_id}|${n.label}|${n.at_utc}`, body, hash: await sha256(body.join('\n')) });
   }
   return out;
 }

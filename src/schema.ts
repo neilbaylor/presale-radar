@@ -340,4 +340,18 @@ CREATE TABLE artist_notes (
 );
 CREATE INDEX artist_notes_at ON artist_notes (at_utc);
 `,
+  /* 5: short calendar links, and knowing what each calendar event stands for */ `
+CREATE TABLE short_links (
+  token      TEXT PRIMARY KEY,
+  user_id    BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,             -- sale | got | hide
+  target     TEXT NOT NULL,             -- sale id, or comma-separated event ids
+  created_at BIGINT NOT NULL,
+  UNIQUE (user_id, kind, target)
+);
+
+-- What each calendar event stands for, so deleting it in Calendar can hide the show.
+ALTER TABLE calendar_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'sale';   -- sale | signup
+ALTER TABLE calendar_items ADD COLUMN target TEXT NOT NULL DEFAULT '';     -- event ids, or the sign-up key
+`,
 ];
