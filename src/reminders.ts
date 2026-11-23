@@ -72,7 +72,9 @@ export async function runReminders(ctx: Ctx): Promise<number> {
         const saleName = row.kind === 'public' ? 'Public on-sale' : row.name;
         const mins = Math.max(1, Math.round((start - t) / 60_000));
         const title = offset === 0 ? `${who}: ${saleName} is open` : `${who}: ${saleName} in ${mins} min`;
-        const body = [`${row.ev.venue_name ?? ''} · ${formatTime(start, user.prefs.timeZone)}`, requirementHint(row, list)].filter(Boolean).join('\n');
+        // The earliest heads-up is the moment to catch an expired Ticketmaster session.
+        const signin = offset > 0 && offset === Math.max(...offsets) ? 'Check you’re still signed in to Ticketmaster.' : null;
+        const body = [`${row.ev.venue_name ?? ''} · ${formatTime(start, user.prefs.timeZone)}`, requirementHint(row, list), signin].filter(Boolean).join('\n');
         if (
           await enqueue(ctx, user.id, {
             type: 'reminder',

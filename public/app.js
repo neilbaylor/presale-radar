@@ -1215,9 +1215,6 @@ function viewGo(saleId) {
   const phase = salePhase(sale);
   const codes = sale.codes ?? [];
   const best = codes[0];
-  const checklist = checklistItems(sale, best);
-  const done = loadChecks(sale.id);
-  const allDone = checklist.every((c) => done.has(c.id) || c.auto);
   const nextSale = show.sales.filter((x) => x.id !== sale.id && x.startUtc && x.startUtc > now()).sort((a, b) => a.startUtc - b.startUtc)[0];
   const launch = !(S.ui.launchOff ?? []).includes(sale.id) && phase !== 'over' && (phase === 'open' || sale.startUtc - now() <= 15 * MIN);
   if (launch) return launchView(show, sale, codes);
@@ -1263,13 +1260,7 @@ function viewGo(saleId) {
     ${
       phase === 'over' || phase === 'open'
         ? afterSale(show, nextSale)
-        : `<div class="section"><div class="section-head"><h2>Before it starts</h2>${allDone ? '<span class="pill good">Ready</span>' : ''}</div>
-           <div class="card" style="padding:4px 16px">${checklist
-             .map(
-               (c) => `<div class="check ${done.has(c.id) || c.auto ? 'done' : ''}" data-act="check" data-sale="${esc(sale.id)}" data-id="${c.id}">
-                <div class="box">${done.has(c.id) || c.auto ? I.check : ''}</div><div class="grow"><div class="label">${c.label}</div>${c.hint ? `<div class="small faint">${c.hint}</div>` : ''}</div></div>`,
-             )
-             .join('')}</div></div>
+        : `${signinCard(sale, show)}
            <div class="section"><div class="section-head"><h2>Tips</h2></div><div class="card small muted stack" style="gap:8px">
              <div>• Use one device and one tab. Several can get you flagged.</div>
              <div>• Don't refresh in the queue. It can lose your place.</div>
@@ -1341,20 +1332,37 @@ function codeSection(sale, codes) {
   </div>`;
 }
 
-function checklistItems(sale, best) {
-  const items = [
-    { id: 'signin', label: 'Signed in to the Ticketmaster app', hint: 'Sessions expire. Check now, not at 9:59.' },
-    { id: 'pay', label: 'Card saved and up to date' },
-  ];
-  if (sale.requirement === 'register') {
-    const show = findSale(sale.id)?.show;
-    const n = show?.artistId ? (S.state?.signups ?? []).find((x) => x.artistId === show.artistId && x.at > now()) : null;
-    items.push({ id: 'reg', label: 'Registered for this presale', hint: n ? `Sign-up closes ${fmtDay(n.at)}, ${fmtTime(n.at)}.` : 'Verified Fan and similar need sign-up ahead of time.', auto: !!n?.done });
+/** Origin of the Ticketmaster site this sale lives on (ticketmaster.ca by default). */
+function tmOrigin(show, sale) {
+  try {
+    const u = new URL(sale.url || show.url);
+    if (/ticketmaster\.|livenation\./.test(u.hostname)) return u.origin;
+  } catch {}
+  return 'https://www.ticketmaster.ca';
+}
+
+/**
+ * We can't read another site's sign-in, so this is a one-tap check: it opens
+ * Ticketmaster's orders page, which shows your orders when you're signed in
+ * and the sign-in form when you're not.
+ */
+function signinCard(sale, show) {
+  const at = loadSignin(sale.id);
+  const fresh = at && now() - at < 12 * 60 * MIN;
+  return `<div class="section"><div class="card signin ${fresh ? 'ok' : ''}">
+    <div class="signin-icon">${fresh ? I.check : I.user}</div>
+    <div class="grow"><div class="label">${fresh ? 'Sign-in checked' : 'Still signed in?'}</div>
+      <div class="small muted">${fresh ? `At ${fmtTime(at)}. Recheck if it's been a while.` : 'Ticketmaster sessions expire. Check now, not last minute.'}</div></div>
+    <button class="btn sm ${fresh ? 'ghost' : 'soft'}" data-act="signin-check" data-sale="${esc(sale.id)}" data-href="${esc(tmOrigin(show, sale))}/user/orders">${fresh ? 'Recheck' : 'Check'}</button>
+  </div></div>`;
+}
+
+function loadSignin(saleId) {
+  try {
+    return Number(localStorage.getItem('tm-signin')) || 0;
+  } catch {
+    return 0;
   }
-  if (sale.requirement === 'card') items.push({ id: 'card', label: 'Eligible card saved in Ticketmaster' });
-  if (sale.kind === 'presale' && sale.requirement !== 'card') items.push({ id: 'code', label: best ? `Code ready: ${best.code}` : 'Code ready', auto: !!best });
-  items.push({ id: 'plan', label: 'Know your budget and how many tickets', hint: 'Decide now so you can grab seats fast.' });
-  return items;
 }
 
 function loadChecks(saleId) {
@@ -1768,6 +1776,13 @@ const handlers = {
     const url = found.sale.url || found.show.url;
     if (url) window.open(url, '_blank', 'noopener');
     if (code) toast(`Copied ${code}`);
+  },
+  'signin-check': (el) => {
+    window.open(el.dataset.href, '_blank', 'noopener');
+    try {
+      localStorage.setItem('tm-signin', String(now()));
+    } catch {}
+    setTimeout(render, 400);
   },
   check: (el) => {
     const set = loadChecks(el.dataset.sale);
