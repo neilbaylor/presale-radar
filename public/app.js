@@ -1262,9 +1262,9 @@ function viewGo(saleId) {
       phase === 'over' || phase === 'open'
         ? afterSale(show, nextSale)
         : `           <div class="section"><div class="section-head"><h2>Tips</h2></div><div class="card small muted stack" style="gap:8px">
-             <div>• Use one device and one tab. Several can get you flagged.</div>
-             <div>• Don't refresh in the queue. It can lose your place.</div>
-             <div>• Grab good-enough seats fast. Carts expire and the best rarely come back.</div>
+             <div class="one-line">• One device, one tab. More can get you flagged.</div>
+             <div class="one-line">• Don't refresh in the queue.</div>
+             <div class="one-line">• Grab good-enough seats fast. Carts expire.</div>
            </div></div>`
     }
   </div>`;
