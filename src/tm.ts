@@ -135,7 +135,7 @@ export async function searchArtists(cfg: Config, keyword: string): Promise<any[]
   return (data?._embedded?.attractions ?? []).map((a: any) => ({
     id: a.id,
     name: a.name,
-    image: pickImage(a.images),
+    image: pickImage(a.images, 300),
     upcoming: a.upcomingEvents?._total ?? 0,
     genre: a.classifications?.[0]?.genre?.name ?? null,
   }));
@@ -151,12 +151,16 @@ function simplifyVenue(v: any) {
   };
 }
 
-function pickImage(images: any[] | undefined): string | null {
-  if (!images?.length) return null;
-  const wide = images
-    .filter((i) => i.ratio === '16_9' && i.width >= 500)
-    .sort((a, b) => a.width - b.width);
-  return (wide[0] ?? images[0]).url ?? null;
+/**
+ * The best real artwork for a phone screen: 16:9, at least `minWidth` wide
+ * (sharp on retina), skipping Ticketmaster's generic "fallback" category images.
+ */
+export function pickImage(images: any[] | undefined, minWidth = 1024): string | null {
+  const real = (images ?? []).filter((i) => i?.url && !i.fallback && Number(i.width) > 0);
+  if (!real.length) return null;
+  const wide = real.filter((i) => i.ratio === '16_9').sort((a, b) => a.width - b.width);
+  const pool = wide.length ? wide : [...real].sort((a, b) => a.width - b.width);
+  return (pool.find((i) => i.width >= minWidth) ?? pool[pool.length - 1]).url;
 }
 
 function toMs(iso: string | undefined | null): number | null {
@@ -185,7 +189,7 @@ export function normalizeEvent(e: any): { event: NormalizedEvent; sales: Normali
     id: e.id,
     name: e.name,
     url: e.url ?? null,
-    image: pickImage(e.images),
+    image: pickImage(e.images) ?? attractions.map((a) => pickImage(a.images)).find(Boolean) ?? null,
     localDate: e.dates?.start?.localDate ?? null,
     localTime: e.dates?.start?.localTime ?? null,
     startUtc: toMs(e.dates?.start?.dateTime),

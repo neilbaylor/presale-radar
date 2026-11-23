@@ -75,7 +75,8 @@ function buildEvent(venueIdx: number, n: number, now: number) {
     name: `${artist.name}${n % 2 ? ' — North American Tour' : ''}`,
     type: 'event',
     url: 'https://www.ticketmaster.ca/',
-    images: [],
+    // Demo art for most artists (two have none, to show the initials fallback).
+    images: ARTISTS.indexOf(artist) < 6 ? [{ ratio: '16_9', width: 1280, height: 720, url: `/demo-art/${ARTISTS.indexOf(artist) + 1}.jpg`, fallback: false }] : [],
     dates: {
       start: { localDate: local.toISOString().slice(0, 10), localTime: '19:30:00', dateTime: iso(showStart) },
       status: { code: n === 2 && seed % 7 === 0 ? 'postponed' : 'onsale' },

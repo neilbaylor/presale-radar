@@ -96,6 +96,7 @@ export interface SgEvent {
   performers: string[];
   low: number | null;
   count: number | null;
+  image: string | null;
 }
 
 export function normalizeSg(e: any): SgEvent {
@@ -112,6 +113,8 @@ export function normalizeSg(e: any): SgEvent {
     performers: (e.performers ?? []).sort((a: any, b: any) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0)).map((p: any) => p.name),
     low: typeof stats.lowest_price === 'number' ? stats.lowest_price : null,
     count: typeof stats.listing_count === 'number' ? stats.listing_count : null,
+    // SeatGeek's performer photos; "huge" is the large one.
+    image: (e.performers ?? []).map((p: any) => p.images?.huge ?? p.image).find((u: any) => typeof u === 'string' && u) ?? null,
   };
 }
 
@@ -222,9 +225,10 @@ async function syncOne(ctx: Ctx, src: SgSource & { sg_id: string }) {
       tmId = pickMatch(sg, candidates, src.type === 'venue' ? src.id : null);
     }
     if (tmId) {
-      await ctx.db.query('UPDATE events SET sg_id = $1, sg_url = $2, resale_low = $3, resale_count = $4, resale_at = $5 WHERE id = $6', [
-        sg.id, sg.url, sg.low, sg.count, t, tmId,
-      ]);
+      await ctx.db.query(
+        'UPDATE events SET sg_id = $1, sg_url = $2, resale_low = $3, resale_count = $4, resale_at = $5, image = COALESCE(image, $7) WHERE id = $6',
+        [sg.id, sg.url, sg.low, sg.count, t, tmId, sg.image],
+      );
       result.matched++;
       continue;
     }
@@ -239,7 +243,7 @@ async function syncOne(ctx: Ctx, src: SgSource & { sg_id: string }) {
       id: `sg:${sg.id}`,
       name: sg.title,
       url: sg.url,
-      image: null,
+      image: sg.image,
       localDate: sg.localDate,
       localTime: null,
       startUtc: sg.startUtc,

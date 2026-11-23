@@ -299,6 +299,22 @@ setInterval(() => {
   document.querySelectorAll('[data-rel]').forEach((el) => (el.textContent = relTime(Number(el.dataset.rel))));
 }, 1000);
 
+// ============================================================ artwork
+
+const hue = (name) => [...String(name)].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
+// One letter: two initials can spell real words ("NO" above a Pass button).
+const initials = (name) => (String(name).trim().replace(/^the\s+/i, '')[0] ?? '?').toUpperCase();
+
+/**
+ * Artwork in a fixed-size frame. The coloured initials sit underneath, so the
+ * layout never moves while the image loads, and a broken image just leaves them.
+ */
+function artBox(show, cls = 'artbox') {
+  return `<div class="${cls}" style="--h:${hue(show.artist)}" aria-hidden="true"><span class="art-initials">${esc(initials(show.artist))}</span>${
+    show.image ? `<img src="${esc(show.image)}" alt="" loading="lazy" decoding="async" onload="this.classList.add('in')" onerror="this.remove()">` : ''
+  }</div>`;
+}
+
 // ============================================================ loading placeholders
 
 const skLines = (widths) => widths.map((w) => `<span class="sk sk-line" style="width:${w}%"></span>`).join('');
@@ -750,7 +766,7 @@ function signupBanner(artistId) {
 function deckCard(list) {
   const venues = [...new Set(list.map((s) => s.venue).filter(Boolean))];
   return `<div class="section"><div class="card tap deck-entry" data-act="nav" data-href="#/review">
-    <div class="stack-preview">${list.slice(0, 3).map((s, i) => `<span style="--i:${i}">${esc(s.artist.slice(0, 1))}</span>`).join('')}</div>
+    <div class="stack-preview">${list.slice(0, 3).map((s, i) => `<span style="--i:${i}">${artBox(s, 'artbox mini')}</span>`).join('')}</div>
     <div class="grow"><b>${list.length} new show${list.length > 1 ? 's' : ''} at your venues</b><div class="small muted ellipsis">${esc(venues.slice(0, 3).join(', '))}</div></div>
     <span class="btn sm primary">Review</span></div></div>`;
 }
@@ -783,10 +799,10 @@ function viewReview() {
       ${d.history.length ? `<button class="link-btn" data-act="deck-undo">Undo</button>` : '<span style="width:40px"></span>'}</div>
     <div class="deck-progress"><span style="width:${(d.i / total) * 100}%"></span></div>
     <div class="deck">
-      ${peek ? `<div class="deck-card peek"><div class="art-fallback">${esc(peek.artist.slice(0, 1))}</div></div>` : ''}
+      ${peek ? `<div class="deck-card peek">${artBox(peek, 'artbox deck-art')}</div>` : ''}
       <div class="deck-card" data-deck="${esc(s.id)}">
         <div class="stamp yes">REMIND</div><div class="stamp no">PASS</div>
-        ${s.image ? `<img class="art" src="${esc(s.image)}" alt="">` : `<div class="art-fallback" style="--h:${[...s.artist].reduce((a, c) => a + c.charCodeAt(0), 0) % 360}"><span>${esc(s.artist.split(/\s+/).slice(0, 2).map((w) => w[0]).join(''))}</span></div>`}
+        ${artBox(s, 'artbox deck-art')}
         <div class="deck-body">
           <div class="small" style="color:var(--accent-text);font-weight:600">${esc(s.venue ?? '')}</div>
           <h1 style="margin:2px 0 4px">${esc(s.artist)}</h1>
@@ -918,7 +934,8 @@ function heroCard({ show, sale }) {
     phase === 'open'
       ? `<span class="status-line"><span class="live-dot"></span>&nbsp; Open now</span>`
       : `<span class="status-line muted">${fmtDay(sale.startUtc)} at ${fmtTime(sale.startUtc)}</span>`;
-  return `<div class="card hero tap stack" style="gap:12px" data-act="nav" data-href="#/go/${encodeURIComponent(sale.id)}">
+  return `<div class="card hero tap stack ${show.image ? 'has-art' : ''}" style="gap:12px" data-act="nav" data-href="#/go/${encodeURIComponent(sale.id)}">
+    ${show.image ? `<div class="hero-art" aria-hidden="true"><img src="${esc(show.image)}" alt="" decoding="async" onload="this.classList.add('in')" onerror="this.parentNode.remove()"></div>` : ''}
     <div class="row between"><span class="pill accent">${sale.kind === 'public' ? 'Public on-sale' : esc(sale.name)}</span>${status}</div>
     <div><div style="font-size:24px;font-weight:700;letter-spacing:-0.02em">${esc(show.artist)}</div><div class="muted small">${esc(show.venue ?? '')} · ${fmtLocalDate(show.date)}</div></div>
     ${phase === 'open' ? '' : `<div class="countdown" data-countdown="${sale.startUtc}">${countdownParts(sale.startUtc)}</div>`}
@@ -1146,7 +1163,7 @@ function viewShow(id) {
   return `<div class="screen no-tabs">
     ${backBar(s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener" aria-label="Open on Ticketmaster">${I.external}</a>` : '')}
     <div class="show-head">
-      ${s.image ? `<img class="art" src="${esc(s.image)}" alt="" loading="lazy">` : ''}
+      ${s.image ? artBox(s, 'artbox show-art') : ''}
       <div class="row wrap" style="gap:8px;margin-bottom:8px">${statusPill}${s.gotTickets ? '<span class="pill good">Got tickets</span>' : ''}</div>
       <h1>${esc(s.artist)}</h1>
       ${s.name !== s.artist ? `<div class="muted">${esc(s.name)}</div>` : ''}
@@ -1234,8 +1251,8 @@ function viewGo(saleId) {
     ${top}
     <div class="stack" style="gap:4px;margin:8px 0 16px">
       <span class="pill accent" style="align-self:flex-start">${sale.kind === 'public' ? 'Public on-sale' : esc(sale.name)}</span>
-      <h1 style="margin-top:8px">${esc(show.artist)}</h1>
-      <div class="muted">${esc(show.venue ?? '')} · ${fmtLocalDate(show.date)}</div>
+      <div class="row" style="gap:12px;margin-top:8px;align-items:center">${show.image ? artBox(show, 'artbox thumb') : ''}
+        <div class="grow"><h1>${esc(show.artist)}</h1><div class="muted">${esc(show.venue ?? '')} · ${fmtLocalDate(show.date)}</div></div></div>
     </div>
     ${S.state && show.artistId && phase === 'prep' ? signupBanner(show.artistId) : ''}
     <div class="card stack" style="gap:16px;padding:20px${S.state && show.artistId && phase === 'prep' && openSignups(show.artistId).length ? ';margin-top:16px' : ''}">

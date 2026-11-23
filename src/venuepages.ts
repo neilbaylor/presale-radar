@@ -22,6 +22,7 @@ export interface PageEvent {
   onsaleUtc: number | null;
   soldOut: boolean;
   priceMin: number | null;
+  image: string | null;
 }
 
 /** ISO date-time; without an offset it's taken as local time at the venue. */
@@ -82,6 +83,7 @@ export function extractJsonLdEvents(html: string, timeZone: string): PageEvent[]
       onsaleUtc: onsales.length ? Math.min(...onsales) : null,
       soldOut: offers.some((o: any) => /SoldOut/i.test(String(o.availability ?? ''))),
       priceMin: prices.length ? Math.min(...prices) : null,
+      image: asArray(e.image).map((i: any) => (typeof i === 'string' ? i : i?.url)).find((u: any) => typeof u === 'string' && /^https?:/.test(u)) ?? null,
     };
   }).filter((e) => e.name && e.localDate);
 }
@@ -117,6 +119,7 @@ export function extractIcsEvents(text: string, timeZone: string): PageEvent[] {
       onsaleUtc: null,
       soldOut: false,
       priceMin: null,
+      image: null,
     };
   }).filter((e) => e.name && e.localDate);
 }
@@ -139,7 +142,7 @@ async function upsertPageEvent(ctx: Ctx, page: { url: string; venue_id: string |
     [e.localDate],
   );
   const headline = headlineFrom(e);
-  const asSg = { id: '', title: e.name, url: e.url, localDate: e.localDate, startUtc: e.startUtc, venueName: e.venueName ?? '', city: null, performers: [headline, ...e.performers], low: null, count: null };
+  const asSg = { id: '', title: e.name, url: e.url, localDate: e.localDate, startUtc: e.startUtc, venueName: e.venueName ?? '', city: null, performers: [headline, ...e.performers], low: null, count: null, image: null };
   if (pickMatch(asSg, candidates, page.venue_id)) return { matched: true, changes: [] };
 
   const id = `web:${(await sha256(`${page.venue_id ?? e.venueName}|${e.localDate}|${slugify(headline)}`)).slice(0, 16)}`;
@@ -151,7 +154,7 @@ async function upsertPageEvent(ctx: Ctx, page: { url: string; venue_id: string |
     id,
     name: e.name,
     url: e.url ?? page.url,
-    image: null,
+    image: e.image,
     localDate: e.localDate,
     localTime: null,
     startUtc: e.startUtc,

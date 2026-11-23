@@ -282,3 +282,19 @@ describe('calendar and state', () => {
     expect(f.artists.has('A1')).toBe(true);
   });
 });
+
+describe('artwork', () => {
+  it('picks sharp 16:9 art and skips generic fallback images', async () => {
+    const { pickImage } = await import('../src/tm.js');
+    const imgs = [
+      { ratio: '16_9', width: 2048, url: 'big', fallback: false },
+      { ratio: '16_9', width: 1024, url: 'right', fallback: false },
+      { ratio: '16_9', width: 640, url: 'small', fallback: false },
+      { ratio: '3_2', width: 1136, url: 'other-ratio', fallback: false },
+    ];
+    expect(pickImage(imgs)).toBe('right');
+    expect(pickImage([{ ratio: '16_9', width: 2048, url: 'generic', fallback: true }])).toBeNull();
+    expect(pickImage([{ ratio: '16_9', width: 640, url: 'only', fallback: false }])).toBe('only');
+    expect(pickImage([])).toBeNull();
+  });
+});

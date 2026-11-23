@@ -123,6 +123,8 @@ export async function calendarEntries(ctx: Ctx, user: User, baseUrl: string): Pr
       fold(`LOCATION:${esc(group.length > 1 ? `${group.length} dates` : r.ev.venue_name ?? '')}`),
       fold(`DESCRIPTION:${esc(desc)}`),
       fold(`URL:${open}`),
+      // RFC 7986 event image. Apple and Google Calendar ignore it today; some calendar apps show it.
+      ...(r.ev.image && /^https:/.test(r.ev.image) ? [fold(`IMAGE;VALUE=URI;DISPLAY=BADGE:${r.ev.image}`)] : []),
       ...(withAlarm
         ? ['BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT15M', fold(`DESCRIPTION:${esc(`${who} ${saleName} in 15 minutes`)}`), 'END:VALARM']
         : []),
